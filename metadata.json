@@ -1,0 +1,6 @@
+{
+  "name": "Vanguard Arena",
+  "description": "3D multiplayer arena shooter with live servers, matchmaking, real-time chat, GLB 3D assets, Unreal-style character movement, and cross-platform desktop and mobile controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
