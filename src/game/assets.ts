@@ -11,8 +11,12 @@ export interface LoadedGlbAsset {
 const ASSET_URLS = {
   soldier: '/models/Soldier.glb',
   robot: '/models/RobotExpressive.glb',
-  truck: '/models/CesiumMilkTruck.glb',
   helmet: '/models/DamagedHelmet.glb',
+  barrel: '/models/barrel/model.gltf',
+  ammo_box: '/models/ammo_box/model.gltf',
+  barrier: '/models/barrier/model.gltf',
+  rock: '/models/rock/model.gltf',
+  container: '/models/container/model.gltf',
 } as const;
 
 export type GlbAssetKey = keyof typeof ASSET_URLS;
@@ -23,12 +27,9 @@ class AssetRegistry {
   private inflight = new Map<GlbAssetKey, Promise<LoadedGlbAsset | null>>();
 
   public preloadAll(): Promise<void> {
-    return Promise.all([
-      this.load('robot'),
-      this.load('soldier'),
-      this.load('truck'),
-      this.load('helmet'),
-    ]).then(() => undefined);
+    return Promise.all(
+      (Object.keys(ASSET_URLS) as GlbAssetKey[]).map((key) => this.load(key)),
+    ).then(() => undefined);
   }
 
   public load(key: GlbAssetKey): Promise<LoadedGlbAsset | null> {
@@ -71,6 +72,35 @@ class AssetRegistry {
     return this.cache.get(key) ?? null;
   }
 
+  public instantiateDynamicProp(kind: 'crate' | 'barrel', size: number): THREE.Group | null {
+    const key: GlbAssetKey = kind === 'barrel' ? 'barrel' : 'container';
+    const asset = this.cache.get(key);
+    if (!asset) return null;
+
+    const wrapper = new THREE.Group();
+    const clone = asset.scene.clone(true);
+    const box = new THREE.Box3().setFromObject(clone);
+    const dims = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    box.getSize(dims);
+    box.getCenter(center);
+
+    const targetHeight = kind === 'barrel' ? size * 1.15 : size;
+    const scale = targetHeight / Math.max(0.05, dims.y);
+    clone.scale.setScalar(scale);
+    // Center around (0, 0, 0) so it matches Cannon rigid-body center of mass
+    clone.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+    clone.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.isMesh) {
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+      }
+    });
+    wrapper.add(clone);
+    return wrapper;
+  }
+
   public instantiateCharacter(
     characterId: CharacterId,
     tintHex: number,
@@ -91,8 +121,7 @@ class AssetRegistry {
         cloned.rotation.y = Math.PI; // Robot faces +Z in source; flip to -Z forward
       } else {
         cloned.scale.setScalar(1.0);
-        // Soldier.glb already faces -Z forward in source
-        cloned.rotation.y = 0;
+        cloned.rotation.y = 0; // Soldier already faces -Z forward
       }
 
       cloned.traverse((obj) => {
@@ -105,36 +134,45 @@ class AssetRegistry {
 
       root.add(cloned);
 
-      // Subtle faction visor/shoulder light ring grounded on actor
       const badgeMat = new THREE.MeshStandardMaterial({
         color: tintHex,
         emissive: tintHex,
-        emissiveIntensity: 0.75,
-        roughness: 0.25,
-        metalness: 0.5,
+        emissiveIntensity: 1.15,
+        roughness: 0.2,
+        metalness: 0.6,
       });
-      const chestBeacon = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.08, 0.08), badgeMat);
-      chestBeacon.position.set(0, 1.38, -0.2);
+      const chestBeacon = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.032, 0.04), badgeMat);
+      chestBeacon.position.set(0, 1.32, -0.14);
       root.add(chestBeacon);
 
-      // Held 3rd-person tactical weapon silhouette (pointing -Z forward)
+      // Held 3rd-person multi-part tactical rifle (pointing -Z forward)
       const tpGun = new THREE.Group();
-      tpGun.position.set(0.22, 1.12, -0.32);
+      tpGun.position.set(0.22, 1.12, -0.34);
       const gunBodyMat = new THREE.MeshStandardMaterial({
         color: 0x1e293b,
-        roughness: 0.38,
-        metalness: 0.78,
+        roughness: 0.34,
+        metalness: 0.82,
       });
-      const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.54), gunBodyMat);
+      const gunGripMat = new THREE.MeshStandardMaterial({
+        color: 0x09090b,
+        roughness: 0.8,
+        metalness: 0.15,
+      });
+      const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.56), gunBodyMat);
       const gunBarrel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.018, 0.018, 0.34, 8),
+        new THREE.CylinderGeometry(0.018, 0.018, 0.36, 10),
         gunBodyMat,
       );
       gunBarrel.rotation.x = Math.PI / 2;
-      gunBarrel.position.set(0, 0.02, -0.36);
-      const gunGlow = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.02, 0.22), badgeMat);
-      gunGlow.position.set(0, 0.03, -0.05);
-      tpGun.add(gunBody, gunBarrel, gunGlow);
+      gunBarrel.position.set(0, 0.02, -0.38);
+      const gunMag = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.16, 0.07), gunGripMat);
+      gunMag.position.set(0, -0.1, -0.08);
+      gunMag.rotation.x = 0.2;
+      const gunOptic = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.045, 0.14), gunGripMat);
+      gunOptic.position.set(0, 0.082, -0.06);
+      const gunGlow = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.02, 0.24), badgeMat);
+      gunGlow.position.set(0, 0.03, -0.06);
+      tpGun.add(gunBody, gunBarrel, gunMag, gunOptic, gunGlow);
       root.add(tpGun);
 
       const mixer = new THREE.AnimationMixer(cloned);
@@ -167,7 +205,6 @@ class AssetRegistry {
       return { root, mixer, actions: { idle, walk, run }, isGlb: true };
     }
 
-    // High-craft 8-part composite procedural character fallback while GLB streams
     return {
       root: createProceduralOperative(tintHex),
       mixer: null,
@@ -183,8 +220,8 @@ export function createProceduralOperative(accentHex: number): THREE.Group {
   const group = new THREE.Group();
   const armorMat = new THREE.MeshStandardMaterial({
     color: 0x334155,
-    roughness: 0.55,
-    metalness: 0.35,
+    roughness: 0.5,
+    metalness: 0.45,
   });
   const darkMat = new THREE.MeshStandardMaterial({
     color: 0x0f172a,
@@ -194,12 +231,11 @@ export function createProceduralOperative(accentHex: number): THREE.Group {
   const visorMat = new THREE.MeshStandardMaterial({
     color: accentHex,
     emissive: accentHex,
-    emissiveIntensity: 0.85,
+    emissiveIntensity: 1.1,
     roughness: 0.15,
     metalness: 0.8,
   });
 
-  // Boots + legs (pivot at y=0 bottom-center)
   const legGeo = new THREE.BoxGeometry(0.18, 0.72, 0.22);
   const leftLeg = new THREE.Mesh(legGeo, darkMat);
   leftLeg.position.set(-0.14, 0.36, 0);
@@ -211,13 +247,11 @@ export function createProceduralOperative(accentHex: number): THREE.Group {
   rightLeg.castShadow = true;
   group.add(rightLeg);
 
-  // Torso chestplate
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.62, 0.32), armorMat);
   torso.position.set(0, 1.05, 0);
   torso.castShadow = true;
   group.add(torso);
 
-  // Pauldrons
   const pauldronGeo = new THREE.BoxGeometry(0.18, 0.2, 0.28);
   const leftPauldron = new THREE.Mesh(pauldronGeo, armorMat);
   leftPauldron.position.set(-0.34, 1.28, 0);
@@ -227,7 +261,6 @@ export function createProceduralOperative(accentHex: number): THREE.Group {
   rightPauldron.position.set(0.34, 1.28, 0);
   group.add(rightPauldron);
 
-  // Helmet + emissive tactical visor facing -Z
   const helmet = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.34), armorMat);
   helmet.position.set(0, 1.56, 0);
   helmet.castShadow = true;
@@ -237,7 +270,6 @@ export function createProceduralOperative(accentHex: number): THREE.Group {
   visor.position.set(0, 1.58, -0.16);
   group.add(visor);
 
-  // Tactical rifle silhouette held forward
   const rifle = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 0.68), darkMat);
   rifle.position.set(0.26, 1.05, -0.35);
   group.add(rifle);
@@ -246,15 +278,15 @@ export function createProceduralOperative(accentHex: number): THREE.Group {
 }
 
 /**
- * Builds composite 5-8 part first-person tactical weapon viewmodels
+ * Builds composite 8-12 part beveled PBR first-person weapon viewmodels
  */
 export function buildFirstPersonWeaponModel(weaponId: WeaponId): THREE.Group {
   const root = new THREE.Group();
 
   const bodyMat = new THREE.MeshStandardMaterial({
     color: 0x1e293b,
-    roughness: 0.42,
-    metalness: 0.72,
+    roughness: 0.36,
+    metalness: 0.78,
   });
   const gripMat = new THREE.MeshStandardMaterial({
     color: 0x09090b,
@@ -262,9 +294,9 @@ export function buildFirstPersonWeaponModel(weaponId: WeaponId): THREE.Group {
     metalness: 0.12,
   });
   const barrelMat = new THREE.MeshStandardMaterial({
-    color: 0x475569,
-    roughness: 0.22,
-    metalness: 0.9,
+    color: 0x64748b,
+    roughness: 0.2,
+    metalness: 0.92,
   });
 
   const accentColor =
@@ -279,44 +311,44 @@ export function buildFirstPersonWeaponModel(weaponId: WeaponId): THREE.Group {
   const glowMat = new THREE.MeshStandardMaterial({
     color: accentColor,
     emissive: accentColor,
-    emissiveIntensity: 1.4,
-    roughness: 0.2,
-    metalness: 0.5,
+    emissiveIntensity: 1.7,
+    roughness: 0.18,
+    metalness: 0.45,
   });
 
   if (weaponId === 'pulse-carbine') {
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.12, 0.5), bodyMat);
+    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.12, 0.52), bodyMat);
     receiver.position.set(0, 0, -0.12);
+    const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.018, 0.44), barrelMat);
+    topRail.position.set(0, 0.066, -0.16);
     const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.018, 0.38, 12), barrelMat);
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 0.02, -0.47);
-    const muzzleBrake = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.022, 0.07, 10), gripMat);
+    const muzzleBrake = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.022, 0.075, 10), gripMat);
     muzzleBrake.rotation.x = Math.PI / 2;
     muzzleBrake.position.set(0, 0.02, -0.66);
-    const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.08, 0.26), gripMat);
+    const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.074, 0.082, 0.28), gripMat);
     shroud.position.set(0, 0.01, -0.35);
-    const foregrip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.11, 0.05), gripMat);
-    foregrip.position.set(0, -0.08, -0.35);
+    const foregrip = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.11, 0.052), gripMat);
+    foregrip.position.set(0, -0.082, -0.35);
     const mag = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.19, 0.075), gripMat);
     mag.position.set(0, -0.13, -0.11);
     mag.rotation.x = 0.22;
-    const sightBase = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.024, 0.14), barrelMat);
-    sightBase.position.set(0, 0.072, -0.08);
-    const sightFrame = new THREE.Mesh(new THREE.TorusGeometry(0.024, 0.005, 6, 16), gripMat);
-    sightFrame.position.set(0, 0.105, -0.08);
+    const sightFrame = new THREE.Mesh(new THREE.TorusGeometry(0.025, 0.0055, 8, 18), gripMat);
+    sightFrame.position.set(0, 0.106, -0.08);
     const sightDot = new THREE.Mesh(new THREE.SphereGeometry(0.0045, 8, 8), glowMat);
-    sightDot.position.set(0, 0.105, -0.08);
+    sightDot.position.set(0, 0.106, -0.08);
     const strip = new THREE.Mesh(new THREE.BoxGeometry(0.092, 0.015, 0.26), glowMat);
     strip.position.set(0, 0.025, -0.16);
-    root.add(receiver, barrel, muzzleBrake, shroud, foregrip, mag, sightBase, sightFrame, sightDot, strip);
+    root.add(receiver, topRail, barrel, muzzleBrake, shroud, foregrip, mag, sightFrame, sightDot, strip);
   } else if (weaponId === 'rail-rifle') {
-    const chassis = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.115, 0.64), bodyMat);
+    const chassis = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.115, 0.66), bodyMat);
     chassis.position.set(0, 0, -0.18);
     const upperRail = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.026, 0.48), barrelMat);
     upperRail.position.set(0, 0.058, -0.44);
     const lowerRail = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.026, 0.48), barrelMat);
     lowerRail.position.set(0, -0.025, -0.44);
-    const core = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.032, 0.44), glowMat);
+    const core = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.032, 0.46), glowMat);
     core.position.set(0, 0.016, -0.43);
     const scopeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.024, 0.24, 14), gripMat);
     scopeTube.rotation.x = Math.PI / 2;
@@ -344,7 +376,6 @@ export function buildFirstPersonWeaponModel(weaponId: WeaponId): THREE.Group {
     ironSight.position.set(0, 0.065, -0.58);
     root.add(body, twinBarrelL, twinBarrelR, pump, vent, ironSight);
   } else {
-    // Frag Launcher
     const frame = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.42), bodyMat);
     frame.position.set(0, -0.02, -0.1);
     const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.088, 0.18, 14), gripMat);

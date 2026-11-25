@@ -43,7 +43,7 @@ export interface MapSpawnPoint {
 
 export interface MapGlbProp {
   id: string;
-  model: 'truck' | 'helmet';
+  model: 'barrier' | 'barrel' | 'ammo_box' | 'container' | 'rock' | 'helmet';
   x: number;
   y: number;
   z: number;
@@ -149,26 +149,16 @@ export const ARENA_MAPS: Record<MapId, ArenaMapSpec> = {
       { id: 'pad-s', x: 0, y: 0, z: 15, radius: 1.6, boostY: 13.5, boostHoriz: [0, 4] },
     ],
     glbProps: [
-      {
-        id: 'foundry-truck-1',
-        model: 'truck',
-        x: -24,
-        y: 0,
-        z: 10,
-        rotY: 0.45,
-        scale: 1.25,
-        colliderHalf: [2.6, 1.8, 1.4],
-      },
-      {
-        id: 'foundry-truck-2',
-        model: 'truck',
-        x: 24,
-        y: 0,
-        z: -10,
-        rotY: -2.6,
-        scale: 1.25,
-        colliderHalf: [2.6, 1.8, 1.4],
-      },
+      { id: 'foundry-barrier-1', model: 'barrier', x: -12, y: 0, z: 18, rotY: 0.2, scale: 1.65, colliderHalf: [1.3, 0.9, 0.5] },
+      { id: 'foundry-barrier-2', model: 'barrier', x: 12, y: 0, z: -18, rotY: Math.PI + 0.2, scale: 1.65, colliderHalf: [1.3, 0.9, 0.5] },
+      { id: 'foundry-barrier-3', model: 'barrier', x: -24, y: 0, z: 6, rotY: Math.PI * 0.5, scale: 1.65, colliderHalf: [0.5, 0.9, 1.3] },
+      { id: 'foundry-barrier-4', model: 'barrier', x: 24, y: 0, z: -6, rotY: Math.PI * 0.5, scale: 1.65, colliderHalf: [0.5, 0.9, 1.3] },
+      { id: 'foundry-cont-1', model: 'container', x: -22, y: 0, z: 10, rotY: 0.4, scale: 2.6, colliderHalf: [0.85, 0.65, 0.85] },
+      { id: 'foundry-cont-2', model: 'container', x: 22, y: 0, z: -10, rotY: -2.7, scale: 2.6, colliderHalf: [0.85, 0.65, 0.85] },
+      { id: 'foundry-ammo-1', model: 'ammo_box', x: 16, y: 3.0, z: -4, rotY: 0.3, scale: 3.8 },
+      { id: 'foundry-ammo-2', model: 'ammo_box', x: -16, y: 3.0, z: 4, rotY: -0.4, scale: 3.8 },
+      { id: 'foundry-barrel-s1', model: 'barrel', x: -9.8, y: 0, z: -9, rotY: 0, scale: 1.25 },
+      { id: 'foundry-barrel-s2', model: 'barrel', x: 9.8, y: 0, z: 9, rotY: 1.2, scale: 1.25 },
       {
         id: 'foundry-relic',
         model: 'helmet',
@@ -176,7 +166,7 @@ export const ARENA_MAPS: Record<MapId, ArenaMapSpec> = {
         y: 3.9,
         z: 0,
         rotY: 0,
-        scale: 0.9,
+        scale: 0.95,
       },
     ],
     crates: [
@@ -251,26 +241,14 @@ export const ARENA_MAPS: Record<MapId, ArenaMapSpec> = {
       { id: 'h-pad-w', x: -11, y: 0, z: -11, radius: 1.6, boostY: 13.0, boostHoriz: [3, 3] },
     ],
     glbProps: [
-      {
-        id: 'helios-truck-1',
-        model: 'truck',
-        x: -24,
-        y: 0,
-        z: 14,
-        rotY: 0.9,
-        scale: 1.3,
-        colliderHalf: [2.6, 1.8, 1.4],
-      },
-      {
-        id: 'helios-truck-2',
-        model: 'truck',
-        x: 24,
-        y: 0,
-        z: -14,
-        rotY: -2.2,
-        scale: 1.3,
-        colliderHalf: [2.6, 1.8, 1.4],
-      },
+      { id: 'helios-rock-1', model: 'rock', x: -24, y: 0, z: 14, rotY: 0.8, scale: 17, colliderHalf: [1.6, 0.85, 1.4] },
+      { id: 'helios-rock-2', model: 'rock', x: 24, y: 0, z: -14, rotY: -2.1, scale: 17, colliderHalf: [1.6, 0.85, 1.4] },
+      { id: 'helios-rock-3', model: 'rock', x: -26, y: 0, z: -26, rotY: 1.5, scale: 21, colliderHalf: [1.9, 1.0, 1.6] },
+      { id: 'helios-rock-4', model: 'rock', x: 26, y: 0, z: 26, rotY: -1.1, scale: 21, colliderHalf: [1.9, 1.0, 1.6] },
+      { id: 'helios-barrier-1', model: 'barrier', x: -8, y: 0, z: 22, rotY: 0.15, scale: 1.65, colliderHalf: [1.3, 0.9, 0.5] },
+      { id: 'helios-barrier-2', model: 'barrier', x: 8, y: 0, z: -22, rotY: Math.PI + 0.15, scale: 1.65, colliderHalf: [1.3, 0.9, 0.5] },
+      { id: 'helios-ammo-1', model: 'ammo_box', x: 18, y: 2.6, z: 6, rotY: 0.4, scale: 3.8 },
+      { id: 'helios-ammo-2', model: 'ammo_box', x: -18, y: 2.6, z: -6, rotY: -0.5, scale: 3.8 },
       {
         id: 'helios-relic',
         model: 'helmet',
@@ -351,26 +329,14 @@ export const ARENA_MAPS: Record<MapId, ArenaMapSpec> = {
       { id: 'b-pad-s', x: 0, y: 0, z: 24, radius: 1.7, boostY: 14, boostHoriz: [0, -5] },
     ],
     glbProps: [
-      {
-        id: 'citadel-truck-1',
-        model: 'truck',
-        x: 20,
-        y: 0,
-        z: 22,
-        rotY: -0.7,
-        scale: 1.25,
-        colliderHalf: [2.6, 1.8, 1.4],
-      },
-      {
-        id: 'citadel-truck-2',
-        model: 'truck',
-        x: -20,
-        y: 0,
-        z: -22,
-        rotY: 2.4,
-        scale: 1.25,
-        colliderHalf: [2.6, 1.8, 1.4],
-      },
+      { id: 'citadel-barrier-1', model: 'barrier', x: 20, y: 0, z: 22, rotY: -0.7, scale: 1.65, colliderHalf: [1.3, 0.9, 0.5] },
+      { id: 'citadel-barrier-2', model: 'barrier', x: -20, y: 0, z: -22, rotY: 2.4, scale: 1.65, colliderHalf: [1.3, 0.9, 0.5] },
+      { id: 'citadel-cont-1', model: 'container', x: -21, y: 0, z: 21, rotY: 0.8, scale: 2.7, colliderHalf: [0.9, 0.65, 0.9] },
+      { id: 'citadel-cont-2', model: 'container', x: 21, y: 0, z: -21, rotY: -2.3, scale: 2.7, colliderHalf: [0.9, 0.65, 0.9] },
+      { id: 'citadel-rock-1', model: 'rock', x: -28, y: 0, z: 0, rotY: 0.4, scale: 16, colliderHalf: [1.5, 0.8, 1.3] },
+      { id: 'citadel-rock-2', model: 'rock', x: 28, y: 0, z: 0, rotY: 2.8, scale: 16, colliderHalf: [1.5, 0.8, 1.3] },
+      { id: 'citadel-ammo-1', model: 'ammo_box', x: 4, y: 3.0, z: -15, rotY: 0.2, scale: 3.8 },
+      { id: 'citadel-ammo-2', model: 'ammo_box', x: -4, y: 3.0, z: 15, rotY: -0.2, scale: 3.8 },
       {
         id: 'citadel-relic',
         model: 'helmet',

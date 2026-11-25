@@ -103,11 +103,11 @@ export const GameHud: React.FC<GameHudProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-10 pointer-events-none select-none">
+    <div className="absolute inset-0 z-10 pointer-events-none select-none">
       {/* Damage / Low HP Peripheral Vignette */}
       {(hud.damageFlash > 0.02 || lowHpOpacity > 0.02) && (
         <div
-          className="fixed inset-0 pointer-events-none transition-opacity"
+          className="absolute inset-0 pointer-events-none transition-opacity"
           style={{
             background:
               'radial-gradient(circle at center, transparent 52%, rgba(220, 38, 38, 0.72) 100%)',
@@ -118,7 +118,7 @@ export const GameHud: React.FC<GameHudProps> = ({
 
       {/* Exact (0,0) Center Reticle & Hitmarker */}
       {hud.alive && (
-        <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
           <div className="relative w-12 h-12 flex items-center justify-center">
             <span className="w-1 h-1 rounded-full bg-white shadow" />
             <span
@@ -152,11 +152,11 @@ export const GameHud: React.FC<GameHudProps> = ({
       )}
 
       {/* Top-Left Cluster: Match Timer, Score, Minimap & Touch HP */}
-      <div className="absolute top-2.5 left-2.5 sm:top-3 sm:left-3 flex items-start gap-2.5">
+      <div className="absolute top-2.5 left-2.5 @2xl:top-3 @2xl:left-3 flex items-start gap-2.5">
         {/* Live 2D Minimap projecting real map boxes & actors */}
         <div
           className={`${
-            touchEnabled ? 'hidden md:block w-16 h-16 lg:w-24 lg:h-24' : 'hidden sm:block w-28 h-28'
+            touchEnabled ? 'hidden @3xl:block w-16 h-16 @5xl:w-24 @5xl:h-24' : 'hidden @2xl:block w-28 h-28'
           } bg-zinc-950/85 border border-zinc-800 rounded-xl p-1.5`}
         >
           <svg
@@ -201,20 +201,20 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
 
         {/* Score, Clock & Touch Compact Vitality */}
-        <div className="bg-zinc-950/85 border border-zinc-800 rounded-xl px-3 py-1.5 sm:px-3.5 sm:py-2">
-          <div className="flex items-center gap-2.5 sm:gap-3">
+        <div className="bg-zinc-950/85 border border-zinc-800 rounded-xl px-3 py-1.5 @2xl:px-3.5 @2xl:py-2">
+          <div className="flex items-center gap-2.5 @2xl:gap-3">
             <div>
-              <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-zinc-400">Clock</div>
-              <div className="font-mono-tabular text-sm sm:text-lg font-bold text-zinc-100 leading-tight">
+              <div className="text-[9px] @2xl:text-[10px] uppercase tracking-wider text-zinc-400">Clock</div>
+              <div className="font-mono-tabular text-sm @2xl:text-lg font-bold text-zinc-100 leading-tight">
                 {formatClock(timeRemainingSec)}
               </div>
             </div>
-            <div className="h-6 sm:h-7 w-px bg-zinc-800" />
+            <div className="h-6 @2xl:h-7 w-px bg-zinc-800" />
             <div>
-              <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-zinc-400">Kills</div>
-              <div className="font-mono-tabular text-sm sm:text-lg font-bold text-amber-400 leading-tight">
+              <div className="text-[9px] @2xl:text-[10px] uppercase tracking-wider text-zinc-400">Kills</div>
+              <div className="font-mono-tabular text-sm @2xl:text-lg font-bold text-amber-400 leading-tight">
                 {localNet?.kills ?? 0}
-                <span className="text-[11px] sm:text-xs text-zinc-400 font-normal">
+                <span className="text-[11px] @2xl:text-xs text-zinc-400 font-normal">
                   /{room?.scoreLimit ?? 15}
                 </span>
               </div>
@@ -244,8 +244,8 @@ export const GameHud: React.FC<GameHudProps> = ({
               </>
             ) : (
               <>
-                <div className="h-7 w-px bg-zinc-800 hidden sm:block" />
-                <div className="hidden sm:block">
+                <div className="h-7 w-px bg-zinc-800 hidden @2xl:block" />
+                <div className="hidden @2xl:block">
                   <div className="text-[10px] uppercase tracking-wider text-zinc-400">Arena</div>
                   <div className="text-xs font-semibold text-zinc-200 max-w-32 truncate">
                     {room?.name ?? mapSpec.name}
@@ -285,7 +285,7 @@ export const GameHud: React.FC<GameHudProps> = ({
             className="h-9 px-2.5 rounded-lg bg-zinc-950/85 border border-zinc-800 hover:border-zinc-600 text-zinc-200 flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
           >
             <Camera className="w-4 h-4 text-cyan-400" />
-            <span className="hidden sm:inline">
+            <span className="hidden @2xl:inline">
               {hud.perspective === 'first-person' ? '1P' : '3P'}
             </span>
           </button>
@@ -366,7 +366,7 @@ export const GameHud: React.FC<GameHudProps> = ({
 
       {/* Respawn Banner when eliminated */}
       {!hud.alive && (
-        <div className="fixed left-1/2 top-1/3 -translate-x-1/2 bg-zinc-950/92 border border-red-800 rounded-xl px-6 py-3 text-center">
+        <div className="absolute left-1/2 top-1/3 -translate-x-1/2 bg-zinc-950/92 border border-red-800 rounded-xl px-6 py-3 text-center">
           <div className="font-display text-lg font-bold text-red-400">ELIMINATED</div>
           <div className="font-mono-tabular text-xs text-zinc-300 mt-1">
             Respawning in {Math.max(0.1, hud.respawnTimer).toFixed(1)}s
@@ -377,7 +377,7 @@ export const GameHud: React.FC<GameHudProps> = ({
       {/* In-Match Real-Time Chat (Desktop lower-left; touch uses chat drawer) */}
       {!touchEnabled && (
         <div
-          className={`hidden md:flex flex-col w-72 absolute left-3 bottom-24 transition-opacity ${
+          className={`hidden @3xl:flex flex-col w-72 absolute left-3 bottom-24 transition-opacity ${
             chatOpen ? 'opacity-100 pointer-events-auto' : 'opacity-80'
           }`}
         >
@@ -432,7 +432,7 @@ export const GameHud: React.FC<GameHudProps> = ({
 
       {/* Touch / Mobile Chat Drawer when toggled */}
       {chatOpen && (
-        <div className={`${touchEnabled ? '' : 'md:hidden'} fixed inset-x-3 top-14 z-30 max-w-md mx-auto bg-zinc-950/95 border border-zinc-700 rounded-xl p-3 pointer-events-auto`}>
+        <div className={`${touchEnabled ? '' : '@3xl:hidden'} absolute inset-x-3 top-14 z-30 max-w-md mx-auto bg-zinc-950/95 border border-zinc-700 rounded-xl p-3 pointer-events-auto`}>
           <div className="max-h-32 overflow-y-auto space-y-1 mb-2">
             {roomChat.slice(-6).map((m) => (
               <div key={m.id} className="text-xs">
@@ -534,7 +534,7 @@ export const GameHud: React.FC<GameHudProps> = ({
             </div>
           </div>
 
-          <div className="hidden sm:flex items-center gap-1.5 pointer-events-auto">
+          <div className="hidden @2xl:flex items-center gap-1.5 pointer-events-auto">
             {WEAPON_ORDER.map((wId) => {
               const spec = WEAPONS[wId];
               const active = wId === hud.weaponId;
@@ -564,7 +564,7 @@ export const GameHud: React.FC<GameHudProps> = ({
 
       {/* Tab Scoreboard Overlay */}
       {scoreboardOpen && (
-        <div className="fixed inset-0 z-30 bg-black/55 flex items-center justify-center p-4 pointer-events-auto">
+        <div className="absolute inset-0 z-30 bg-black/55 flex items-center justify-center p-4 pointer-events-auto">
           <div className="w-full max-w-xl bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
               <div>

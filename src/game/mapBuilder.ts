@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { ArenaMapSpec, MapBox, MapRamp } from '../shared/maps';
 import { assetRegistry } from './assets';
 
@@ -7,14 +6,50 @@ export interface BuiltArenaScene {
   root: THREE.Group;
   crateMeshes: Map<string, THREE.Object3D>;
   jumpPadRings: THREE.Mesh[];
+  radarDishes: THREE.Object3D[];
+  ambientMotes: THREE.Points | null;
   relicGroup: THREE.Object3D | null;
   collidableMeshes: THREE.Object3D[];
   dispose: () => void;
 }
 
-interface PbrTextureSet {
-  albedo: THREE.CanvasTexture;
-  bump: THREE.CanvasTexture;
+interface LoadedPbrMaps {
+  map: THREE.Texture;
+  normalMap: THREE.Texture;
+  roughnessMap: THREE.Texture;
+}
+
+const texLoader = new THREE.TextureLoader();
+const pbrCache = new Map<string, LoadedPbrMaps>();
+
+function getOrLoadPbrMaps(
+  folder: 'foundry_floor' | 'metal_panel' | 'canyon_sand' | 'arctic_ice',
+  repeatX: number,
+  repeatY: number,
+  renderer: THREE.WebGLRenderer,
+): LoadedPbrMaps {
+  const cacheKey = `${folder}:${repeatX}:${repeatY}`;
+  const existing = pbrCache.get(cacheKey);
+  if (existing) return existing;
+
+  const maxAniso = renderer.capabilities.getMaxAnisotropy();
+
+  const configure = (tex: THREE.Texture, isColor: boolean) => {
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(repeatX, repeatY);
+    tex.anisotropy = maxAniso;
+    tex.colorSpace = isColor ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    return tex;
+  };
+
+  const map = configure(texLoader.load(`/textures/${folder}/diff.jpg`), true);
+  const normalMap = configure(texLoader.load(`/textures/${folder}/nor.jpg`), false);
+  const roughnessMap = configure(texLoader.load(`/textures/${folder}/rough.jpg`), false);
+
+  const bundle = { map, normalMap, roughnessMap };
+  pbrCache.set(cacheKey, bundle);
+  return bundle;
 }
 
 function seededRand(seed: number): () => number {
@@ -26,273 +61,33 @@ function seededRand(seed: number): () => number {
   };
 }
 
-function createGroundTextureSet(
-  kind: 'foundry' | 'canyon' | 'arctic',
-  baseHex: string,
-  accentHex: string,
-  renderer: THREE.WebGLRenderer,
-): PbrTextureSet {
-  const size = 512;
-  const albedoCanvas = document.createElement('canvas');
-  albedoCanvas.width = size;
-  albedoCanvas.height = size;
-  const ctx = albedoCanvas.getContext('2d')!;
-
-  const bumpCanvas = document.createElement('canvas');
-  bumpCanvas.width = size;
-  bumpCanvas.height = size;
-  const bctx = bumpCanvas.getContext('2d')!;
-
-  const rand = seededRand(kind === 'foundry' ? 101 : kind === 'canyon' ? 202 : 303);
-
-  ctx.fillStyle = baseHex;
-  ctx.fillRect(0, 0, size, size);
-  bctx.fillStyle = '#808080';
-  bctx.fillRect(0, 0, size, size);
-
-  if (kind === 'foundry') {
-    // Concrete & steel industrial floor slabs with aggregate grit & expansion seams
-    for (let i = 0; i < 4200; i++) {
-      const x = rand() * size;
-      const y = rand() * size;
-      const w = 1 + rand() * 4;
-      const h = 1 + rand() * 3;
-      const bright = rand() > 0.5;
-      ctx.fillStyle = bright ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.09)';
-      ctx.fillRect(x, y, w, h);
-      bctx.fillStyle = bright ? 'rgba(215,215,215,0.18)' : 'rgba(55,55,55,0.22)';
-      bctx.fillRect(x, y, w, h);
-    }
-    // Slab seams
-    for (let g = 0; g <= size; g += 128) {
-      ctx.strokeStyle = 'rgba(0,0,0,0.34)';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(g, 0);
-      ctx.lineTo(g, size);
-      ctx.moveTo(0, g);
-      ctx.lineTo(size, g);
-      ctx.stroke();
-
-      bctx.strokeStyle = '#262626';
-      bctx.lineWidth = 4;
-      bctx.beginPath();
-      bctx.moveTo(g, 0);
-      bctx.lineTo(g, size);
-      bctx.moveTo(0, g);
-      bctx.lineTo(size, g);
-      bctx.stroke();
-    }
-    // Subtle yellow safety trim lines
-    ctx.strokeStyle = 'rgba(245, 158, 11, 0.22)';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(10, 10, size - 20, size - 20);
-  } else if (kind === 'canyon') {
-    // Stratified desert rock, wind-rippled sand & gravel
-    for (let y = 0; y < size; y += 4) {
-      const wave = Math.sin(y * 0.08) * 0.04 + 0.05;
-      ctx.fillStyle = y % 8 === 0 ? `rgba(255,235,205,${wave})` : `rgba(85,40,15,${wave})`;
-      ctx.fillRect(0, y, size, 3);
-      bctx.fillStyle = y % 8 === 0 ? 'rgba(175,175,175,0.25)' : 'rgba(85,85,85,0.25)';
-      bctx.fillRect(0, y, size, 2);
-    }
-    for (let i = 0; i < 4800; i++) {
-      const x = rand() * size;
-      const y = rand() * size;
-      const r = 1 + rand() * 2.5;
-      ctx.fillStyle = rand() > 0.45 ? 'rgba(65,30,12,0.12)' : 'rgba(255,230,190,0.08)';
-      ctx.fillRect(x, y, r, r);
-      bctx.fillStyle = rand() > 0.5 ? '#b4b4b4' : '#4a4a4a';
-      bctx.fillRect(x, y, r, r);
-    }
-  } else {
-    // Arctic snowpack & brushed cryo-concrete apron
-    for (let i = 0; i < 3600; i++) {
-      const x = rand() * size;
-      const y = rand() * size;
-      const sz = 2 + rand() * 5;
-      ctx.fillStyle = rand() > 0.5 ? 'rgba(255,255,255,0.14)' : 'rgba(100,135,175,0.12)';
-      ctx.fillRect(x, y, sz, sz * 0.7);
-      bctx.fillStyle = rand() > 0.5 ? 'rgba(220,220,220,0.2)' : 'rgba(70,70,70,0.2)';
-      bctx.fillRect(x, y, sz, sz * 0.7);
-    }
-    ctx.strokeStyle = 'rgba(14, 165, 233, 0.22)';
-    ctx.lineWidth = 3;
-    for (let g = 0; g <= size; g += 128) {
-      ctx.strokeRect(g + 4, 4, 120, 120);
-      bctx.strokeStyle = '#383838';
-      bctx.lineWidth = 3;
-      bctx.strokeRect(g + 2, 2, 124, 124);
-    }
-  }
-
-  // Subtle ambient edge accent line
-  void accentHex;
-
-  const albedo = new THREE.CanvasTexture(albedoCanvas);
-  albedo.colorSpace = THREE.SRGBColorSpace;
-  albedo.wrapS = THREE.RepeatWrapping;
-  albedo.wrapT = THREE.RepeatWrapping;
-  albedo.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-  const bump = new THREE.CanvasTexture(bumpCanvas);
-  bump.wrapS = THREE.RepeatWrapping;
-  bump.wrapT = THREE.RepeatWrapping;
-  bump.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-  return { albedo, bump };
-}
-
-function createPanelTextureSet(
-  mode: 'panel' | 'corrugated' | 'crate' | 'barrel',
-  baseHex: string,
-  accentHex: string,
-  renderer: THREE.WebGLRenderer,
-): PbrTextureSet {
-  const size = 256;
-  const albedoCanvas = document.createElement('canvas');
-  albedoCanvas.width = size;
-  albedoCanvas.height = size;
-  const ctx = albedoCanvas.getContext('2d')!;
-
-  const bumpCanvas = document.createElement('canvas');
-  bumpCanvas.width = size;
-  bumpCanvas.height = size;
-  const bctx = bumpCanvas.getContext('2d')!;
-
-  const rand = seededRand(mode.length * 91 + 17);
-
-  ctx.fillStyle = baseHex;
-  ctx.fillRect(0, 0, size, size);
-  bctx.fillStyle = '#808080';
-  bctx.fillRect(0, 0, size, size);
-
-  if (mode === 'corrugated') {
-    // Shipping container vertical steel ribs
-    for (let x = 0; x < size; x += 16) {
-      ctx.fillStyle = 'rgba(255,255,255,0.08)';
-      ctx.fillRect(x, 0, 7, size);
-      ctx.fillStyle = 'rgba(0,0,0,0.18)';
-      ctx.fillRect(x + 8, 0, 7, size);
-
-      bctx.fillStyle = '#d4d4d4';
-      bctx.fillRect(x, 0, 7, size);
-      bctx.fillStyle = '#363636';
-      bctx.fillRect(x + 8, 0, 7, size);
-    }
-    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-    ctx.lineWidth = 10;
-    ctx.strokeRect(5, 5, size - 10, size - 10);
-    bctx.strokeStyle = '#ececec';
-    bctx.lineWidth = 10;
-    bctx.strokeRect(5, 5, size - 10, size - 10);
-  } else if (mode === 'crate') {
-    // Tactical reinforced armor supply crate
-    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-    ctx.lineWidth = 16;
-    ctx.strokeRect(8, 8, size - 16, size - 16);
-    ctx.strokeStyle = accentHex;
-    ctx.lineWidth = 5;
-    ctx.strokeRect(20, 20, size - 40, size - 40);
-    ctx.beginPath();
-    ctx.moveTo(24, 24);
-    ctx.lineTo(size - 24, size - 24);
-    ctx.moveTo(size - 24, 24);
-    ctx.lineTo(24, size - 24);
-    ctx.strokeStyle = 'rgba(0,0,0,0.38)';
-    ctx.lineWidth = 10;
-    ctx.stroke();
-
-    bctx.strokeStyle = '#e5e5e5';
-    bctx.lineWidth = 16;
-    bctx.strokeRect(8, 8, size - 16, size - 16);
-    bctx.strokeStyle = '#303030';
-    bctx.lineWidth = 8;
-    bctx.beginPath();
-    bctx.moveTo(24, 24);
-    bctx.lineTo(size - 24, size - 24);
-    bctx.stroke();
-  } else if (mode === 'barrel') {
-    // Industrial hazard drum with horizontal reinforcement ribs + warning band
-    ctx.fillStyle = '#c2410c';
-    ctx.fillRect(0, 0, size, size);
-    ctx.fillStyle = accentHex;
-    ctx.fillRect(0, size * 0.36, size, size * 0.28);
-    // Hazard diagonal stripes
-    ctx.fillStyle = 'rgba(9,9,11,0.72)';
-    for (let x = -size; x < size * 2; x += 28) {
-      ctx.beginPath();
-      ctx.moveTo(x, size * 0.36);
-      ctx.lineTo(x + 14, size * 0.36);
-      ctx.lineTo(x + 2, size * 0.64);
-      ctx.lineTo(x - 12, size * 0.64);
-      ctx.closePath();
-      ctx.fill();
-    }
-    bctx.fillStyle = '#ececec';
-    bctx.fillRect(0, size * 0.22, size, 12);
-    bctx.fillRect(0, size * 0.74, size, 12);
-  } else {
-    // Architectural panel seams & rivets
-    for (let i = 0; i < 900; i++) {
-      const x = rand() * size;
-      const y = rand() * size;
-      ctx.fillStyle = rand() > 0.5 ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.06)';
-      ctx.fillRect(x, y, 4, 2);
-    }
-    ctx.strokeStyle = 'rgba(0,0,0,0.32)';
-    ctx.lineWidth = 3;
-    bctx.strokeStyle = '#3a3a3a';
-    bctx.lineWidth = 3;
-    for (let p = 0; p <= size; p += 64) {
-      ctx.beginPath();
-      ctx.moveTo(p, 0);
-      ctx.lineTo(p, size);
-      ctx.moveTo(0, p);
-      ctx.lineTo(size, p);
-      ctx.stroke();
-
-      bctx.beginPath();
-      bctx.moveTo(p, 0);
-      bctx.lineTo(p, size);
-      bctx.moveTo(0, p);
-      bctx.lineTo(size, p);
-      bctx.stroke();
-    }
-    // Rivet dots
-    bctx.fillStyle = '#dcdcdc';
-    for (let x = 8; x < size; x += 64) {
-      for (let y = 8; y < size; y += 64) {
-        bctx.fillRect(x, y, 3, 3);
-        bctx.fillRect(x + 48, y, 3, 3);
-      }
-    }
-  }
-
-  const albedo = new THREE.CanvasTexture(albedoCanvas);
-  albedo.colorSpace = THREE.SRGBColorSpace;
-  albedo.wrapS = THREE.RepeatWrapping;
-  albedo.wrapT = THREE.RepeatWrapping;
-  albedo.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-  const bump = new THREE.CanvasTexture(bumpCanvas);
-  bump.wrapS = THREE.RepeatWrapping;
-  bump.wrapT = THREE.RepeatWrapping;
-  bump.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-  return { albedo, bump };
-}
-
 function createContactAoTexture(): THREE.CanvasTexture {
   const size = 128;
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d')!;
-  const grad = ctx.createRadialGradient(size / 2, size / 2, size * 0.16, size / 2, size / 2, size * 0.5);
-  grad.addColorStop(0, 'rgba(0, 0, 0, 0.58)');
-  grad.addColorStop(0.65, 'rgba(0, 0, 0, 0.25)');
+  const grad = ctx.createRadialGradient(size / 2, size / 2, size * 0.14, size / 2, size / 2, size * 0.5);
+  grad.addColorStop(0, 'rgba(0, 0, 0, 0.62)');
+  grad.addColorStop(0.65, 'rgba(0, 0, 0, 0.24)');
   grad.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createSoftParticleTexture(): THREE.CanvasTexture {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 1, size / 2, size / 2, size * 0.5);
+  grad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+  grad.addColorStop(0.45, 'rgba(255, 255, 255, 0.55)');
+  grad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
   const tex = new THREE.CanvasTexture(canvas);
@@ -349,22 +144,20 @@ function createSkyDome(
 
       void main() {
         vec3 d = normalize(vDir);
-        float h = clamp(d.y, -0.1, 1.0);
-        float t = smoothstep(-0.02, 0.48, h);
+        float h = clamp(d.y, -0.15, 1.0);
+        float t = smoothstep(-0.02, 0.5, h);
         vec3 col = mix(uHorizon, uTop, t);
 
-        // Soft cloud wisps in upper sky
-        if (d.y > 0.04) {
-          vec2 uv = d.xz / (d.y + 0.18) * 1.35;
-          float n = noise(uv) * 0.65 + noise(uv * 2.3 + 4.1) * 0.35;
-          float cloudMask = smoothstep(0.55, 0.85, n) * smoothstep(0.04, 0.28, d.y) * 0.32;
-          col = mix(col, mix(uHorizon, vec3(1.0), 0.45), cloudMask);
+        if (d.y > 0.03) {
+          vec2 uv = d.xz / (d.y + 0.2) * 1.45;
+          float n = noise(uv) * 0.6 + noise(uv * 2.4 + 3.7) * 0.4;
+          float cloudMask = smoothstep(0.54, 0.86, n) * smoothstep(0.03, 0.26, d.y) * 0.38;
+          col = mix(col, mix(uHorizon, vec3(1.0), 0.55), cloudMask);
         }
 
-        // Atmospheric sun disc & Rayleigh glow halo
         float sunAmt = max(dot(d, uSunDir), 0.0);
-        col += uSun * pow(sunAmt, 14.0) * 0.35;
-        col += uSun * smoothstep(0.9975, 0.9993, sunAmt) * 1.4;
+        col += uSun * pow(sunAmt, 12.0) * 0.42;
+        col += uSun * smoothstep(0.997, 0.9994, sunAmt) * 1.65;
 
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
@@ -386,7 +179,6 @@ function createDisplacedCliffGeometry(seed: number): THREE.BufferGeometry {
     let vx = pos.getX(i);
     let vy = pos.getY(i);
     let vz = pos.getZ(i);
-    // Flatten base & taper top ridge organically
     if (vy < -0.25) vy = -0.3;
     const n =
       Math.sin(vx * 3.1 + phaseA) * Math.cos(vz * 2.9 + phaseB) * 0.24 +
@@ -420,26 +212,77 @@ function createRampMesh(ramp: MapRamp, mat: THREE.Material): THREE.Mesh {
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(ramp.x, ramp.yLow, ramp.z);
-  if (ramp.riseDir === '-x') {
-    mesh.rotation.y = Math.PI;
-  } else if (ramp.riseDir === '+z') {
-    mesh.rotation.y = -Math.PI / 2;
-  } else if (ramp.riseDir === '-z') {
-    mesh.rotation.y = Math.PI / 2;
-  }
+  if (ramp.riseDir === '-x') mesh.rotation.y = Math.PI;
+  else if (ramp.riseDir === '+z') mesh.rotation.y = -Math.PI / 2;
+  else if (ramp.riseDir === '-z') mesh.rotation.y = Math.PI / 2;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
 }
 
+/**
+ * Generates a biome-matched PMREM environment cubemap from the arena's sky, sun & ground colors
+ * so metallic weapons, armor, helmets, and ice reflect real sky & horizon light rather than flat grey.
+ */
 export function setupSceneEnvironment(
   scene: THREE.Scene,
   renderer: THREE.WebGLRenderer,
+  map?: ArenaMapSpec,
 ): () => void {
+  const envScene = new THREE.Scene();
+
+  const topCol = map?.skyTopColor ?? '#244b7a';
+  const horizonCol = map?.skyHorizonColor ?? '#c47247';
+  const sunCol = map?.sunColor ?? '#ffd4a3';
+  const groundCol = map?.hemiGroundColor ?? '#3b2e26';
+
+  // Upper sky & lower ground bounce sphere inside PMREM bake scene
+  const domeGeo = new THREE.SphereGeometry(20, 24, 16);
+  const domeMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {
+      uTop: { value: new THREE.Color(topCol) },
+      uHor: { value: new THREE.Color(horizonCol) },
+      uGround: { value: new THREE.Color(groundCol) },
+      uSun: { value: new THREE.Color(sunCol) },
+    },
+    vertexShader: `
+      varying vec3 vPos;
+      void main() {
+        vPos = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uTop;
+      uniform vec3 uHor;
+      uniform vec3 uGround;
+      uniform vec3 uSun;
+      varying vec3 vPos;
+      void main() {
+        float y = vPos.y;
+        vec3 col = y >= 0.0
+          ? mix(uHor * 1.15, uTop * 1.2, smoothstep(0.0, 0.75, y))
+          : mix(uHor * 0.7, uGround * 0.85, smoothstep(0.0, -0.6, y));
+        vec3 sunDir = normalize(vec3(0.65, 0.72, 0.38));
+        float sunDot = max(dot(vPos, sunDir), 0.0);
+        col += uSun * pow(sunDot, 20.0) * 5.5;
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  });
+  const dome = new THREE.Mesh(domeGeo, domeMat);
+  envScene.add(dome);
+
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  const envTex = pmrem.fromScene(envScene, 0.035).texture;
   scene.environment = envTex;
+  scene.environmentIntensity = 1.15;
+
   pmrem.dispose();
+  domeGeo.dispose();
+  domeMat.dispose();
+
   return () => {
     envTex.dispose();
   };
@@ -448,6 +291,7 @@ export function setupSceneEnvironment(
 function addArchitecturalDetail(
   b: MapBox,
   root: THREE.Group,
+  radarDishes: THREE.Object3D[],
   disposables: Array<{ dispose: () => void }>,
   steelMat: THREE.Material,
   trimMat: THREE.Material,
@@ -456,9 +300,8 @@ function addArchitecturalDetail(
   aoMat: THREE.Material,
   accentColor: string,
 ): void {
-  // Grounded AO shadow pad under structures touching y=0
   if (b.y <= 0.05) {
-    const aoGeo = new THREE.PlaneGeometry(b.w + 2.4, b.d + 2.4);
+    const aoGeo = new THREE.PlaneGeometry(b.w + 2.6, b.d + 2.6);
     aoGeo.rotateX(-Math.PI / 2);
     const aoMesh = new THREE.Mesh(aoGeo, aoMat);
     aoMesh.position.set(b.x, 0.015, b.z);
@@ -466,25 +309,23 @@ function addArchitecturalDetail(
     disposables.push(aoGeo);
   }
 
-  // Chamfered concrete/steel footing base
   if (b.kind === 'core' || b.kind === 'tower') {
-    const plinthGeo = new THREE.BoxGeometry(b.w + 0.5, 0.36, b.d + 0.5);
+    const plinthGeo = new THREE.BoxGeometry(b.w + 0.55, 0.38, b.d + 0.55);
     const plinth = new THREE.Mesh(plinthGeo, darkMat);
-    plinth.position.set(b.x, b.y + 0.18, b.z);
+    plinth.position.set(b.x, b.y + 0.19, b.z);
     plinth.receiveShadow = true;
     root.add(plinth);
     disposables.push(plinthGeo);
   }
 
   if (b.kind === 'core') {
-    // Emissive reactor trim ring + corner structural buttresses + point light bounce
-    const collarGeo = new THREE.BoxGeometry(b.w + 0.14, 0.16, b.d + 0.14);
+    const collarGeo = new THREE.BoxGeometry(b.w + 0.16, 0.16, b.d + 0.16);
     const collar = new THREE.Mesh(collarGeo, trimMat);
     collar.position.set(b.x, b.y + b.h - 0.14, b.z);
     root.add(collar);
     disposables.push(collarGeo);
 
-    const buttressGeo = new THREE.BoxGeometry(0.42, b.h, 0.42);
+    const buttressGeo = new THREE.BoxGeometry(0.45, b.h, 0.45);
     const corners: Array<[number, number]> = [
       [-b.w * 0.5, -b.d * 0.5],
       [b.w * 0.5, -b.d * 0.5],
@@ -499,26 +340,24 @@ function addArchitecturalDetail(
     }
     disposables.push(buttressGeo);
 
-    const beacon = new THREE.PointLight(accentColor, 3.2, 18, 1.6);
-    beacon.position.set(b.x, b.y + b.h + 1.4, b.z);
+    const beacon = new THREE.PointLight(accentColor, 4.2, 22, 1.5);
+    beacon.position.set(b.x, b.y + b.h + 1.5, b.z);
     root.add(beacon);
   } else if (b.kind === 'bridge') {
-    // Overhang deck cap + glowing edge trim + corner steel support columns + tactical guardrails
-    const capGeo = new THREE.BoxGeometry(b.w + 0.24, 0.22, b.d + 0.24);
+    const capGeo = new THREE.BoxGeometry(b.w + 0.26, 0.22, b.d + 0.26);
     const cap = new THREE.Mesh(capGeo, steelMat);
     cap.position.set(b.x, b.y + b.h - 0.11, b.z);
     cap.receiveShadow = true;
     root.add(cap);
     disposables.push(capGeo);
 
-    const collarGeo = new THREE.BoxGeometry(b.w + 0.28, 0.08, b.d + 0.28);
+    const collarGeo = new THREE.BoxGeometry(b.w + 0.3, 0.08, b.d + 0.3);
     const collar = new THREE.Mesh(collarGeo, trimMat);
     collar.position.set(b.x, b.y + b.h - 0.24, b.z);
     root.add(collar);
     disposables.push(collarGeo);
 
-    // Corner pilasters
-    const pilGeo = new THREE.BoxGeometry(0.35, b.h + 0.9, 0.35);
+    const pilGeo = new THREE.BoxGeometry(0.36, b.h + 0.95, 0.36);
     const corners: Array<[number, number]> = [
       [-b.w * 0.5 + 0.18, -b.d * 0.5 + 0.18],
       [b.w * 0.5 - 0.18, -b.d * 0.5 + 0.18],
@@ -527,34 +366,42 @@ function addArchitecturalDetail(
     ];
     for (const [ox, oz] of corners) {
       const p = new THREE.Mesh(pilGeo, darkMat);
-      p.position.set(b.x + ox, b.y + (b.h + 0.9) * 0.5, b.z + oz);
+      p.position.set(b.x + ox, b.y + (b.h + 0.95) * 0.5, b.z + oz);
       root.add(p);
     }
     disposables.push(pilGeo);
   } else if (b.kind === 'tower') {
-    // Recessed cooling louver bands + rooftop communications antenna
-    const bandGeo = new THREE.BoxGeometry(b.w + 0.12, 0.28, b.d + 0.12);
+    const bandGeo = new THREE.BoxGeometry(b.w + 0.14, 0.28, b.d + 0.14);
     const band1 = new THREE.Mesh(bandGeo, darkMat);
     band1.position.set(b.x, b.y + b.h * 0.55, b.z);
     const band2 = new THREE.Mesh(bandGeo, trimMat);
     band2.position.set(b.x, b.y + b.h - 0.32, b.z);
-    band2.scale.set(1.01, 0.45, 1.01);
-    const mastGeo = new THREE.CylinderGeometry(0.06, 0.12, 2.2, 8);
+    band2.scale.set(1.02, 0.48, 1.02);
+
+    const mastGeo = new THREE.CylinderGeometry(0.07, 0.14, 2.3, 10);
     const mast = new THREE.Mesh(mastGeo, steelMat);
-    mast.position.set(b.x + b.w * 0.25, b.y + b.h + 1.1, b.z - b.d * 0.25);
-    const tipGeo = new THREE.SphereGeometry(0.14, 8, 8);
-    const tip = new THREE.Mesh(tipGeo, trimMat);
-    tip.position.set(b.x + b.w * 0.25, b.y + b.h + 2.25, b.z - b.d * 0.25);
-    root.add(band1, band2, mast, tip);
-    disposables.push(bandGeo, mastGeo, tipGeo);
+    mast.position.set(b.x + b.w * 0.22, b.y + b.h + 1.15, b.z - b.d * 0.22);
+
+    // Animated tactical rotating radar array on central/corner towers
+    const dishPivot = new THREE.Group();
+    dishPivot.position.set(b.x + b.w * 0.22, b.y + b.h + 2.25, b.z - b.d * 0.22);
+    const dishBarGeo = new THREE.BoxGeometry(1.5, 0.22, 0.14);
+    const dishBar = new THREE.Mesh(dishBarGeo, steelMat);
+    const dishTipGeo = new THREE.SphereGeometry(0.14, 8, 8);
+    const dishTip = new THREE.Mesh(dishTipGeo, trimMat);
+    dishTip.position.y = 0.22;
+    dishPivot.add(dishBar, dishTip);
+    radarDishes.push(dishPivot);
+
+    root.add(band1, band2, mast, dishPivot);
+    disposables.push(bandGeo, mastGeo, dishBarGeo, dishTipGeo);
   } else if (b.kind === 'cover') {
-    // Corrugated steel cladding overlay + heavy top/bottom steel frame rails
-    const shellGeo = new THREE.BoxGeometry(b.w + 0.04, b.h - 0.18, b.d + 0.04);
+    const shellGeo = new THREE.BoxGeometry(b.w + 0.05, b.h - 0.18, b.d + 0.05);
     const shell = new THREE.Mesh(shellGeo, containerMat);
     shell.position.set(b.x, b.y + b.h * 0.5, b.z);
     shell.castShadow = true;
     shell.receiveShadow = true;
-    const capGeo = new THREE.BoxGeometry(b.w + 0.12, 0.16, b.d + 0.12);
+    const capGeo = new THREE.BoxGeometry(b.w + 0.14, 0.16, b.d + 0.14);
     const cap = new THREE.Mesh(capGeo, darkMat);
     cap.position.set(b.x, b.y + b.h - 0.08, b.z);
     root.add(shell, cap);
@@ -573,6 +420,7 @@ export function buildArenaMapScene(
   const collidableMeshes: THREE.Object3D[] = [];
   const crateMeshes = new Map<string, THREE.Object3D>();
   const jumpPadRings: THREE.Mesh[] = [];
+  const radarDishes: THREE.Object3D[] = [];
   let relicGroup: THREE.Object3D | null = null;
 
   scene.background = new THREE.Color(map.fogColor);
@@ -586,7 +434,7 @@ export function buildArenaMapScene(
   disposables.push(skyDome.geometry, skyDome.material as THREE.Material);
 
   // Three-Point Outdoor Lighting Rig (Warm Sun + Cool Sky Hemisphere + Rim)
-  const hemi = new THREE.HemisphereLight(map.hemiSkyColor, map.hemiGroundColor, 0.95);
+  const hemi = new THREE.HemisphereLight(map.hemiSkyColor, map.hemiGroundColor, 1.05);
   root.add(hemi);
 
   const keyLight = new THREE.DirectionalLight(map.sunColor, map.sunIntensity);
@@ -605,37 +453,27 @@ export function buildArenaMapScene(
   keyLight.shadow.normalBias = 0.025;
   root.add(keyLight);
 
-  const rimLight = new THREE.DirectionalLight(map.accentColor, 0.65);
+  const rimLight = new THREE.DirectionalLight(map.accentColor, 0.72);
   rimLight.position.set(-38, 24, -34);
   root.add(rimLight);
 
-  // Procedural PBR Texture Sets (Albedo + Bump)
-  const texKind =
-    map.id === 'helios-outpost' ? 'canyon' : map.id === 'borealis-citadel' ? 'arctic' : 'foundry';
+  // Real 1K PBR Web Textures (Albedo + NormalGL + Roughness)
+  const groundFolder =
+    map.id === 'helios-outpost'
+      ? 'canyon_sand'
+      : map.id === 'borealis-citadel'
+        ? 'arctic_ice'
+        : 'foundry_floor';
 
-  const groundTex = createGroundTextureSet(texKind, map.groundTint, map.accentColor, renderer);
-  groundTex.albedo.repeat.set(20, 20);
-  groundTex.bump.repeat.set(20, 20);
-  disposables.push(groundTex.albedo, groundTex.bump);
-
-  const panelTex = createPanelTextureSet('panel', map.structureTint, map.accentColor, renderer);
-  panelTex.albedo.repeat.set(3, 2);
-  panelTex.bump.repeat.set(3, 2);
-  disposables.push(panelTex.albedo, panelTex.bump);
-
-  const corrTex = createPanelTextureSet('corrugated', '#475569', map.accentColor, renderer);
-  corrTex.albedo.repeat.set(2, 1);
-  corrTex.bump.repeat.set(2, 1);
-  disposables.push(corrTex.albedo, corrTex.bump);
-
-  const crateTex = createPanelTextureSet('crate', '#334155', map.accentColor, renderer);
-  disposables.push(crateTex.albedo, crateTex.bump);
-
-  const barrelTex = createPanelTextureSet('barrel', '#9a3412', map.accentColor, renderer);
-  disposables.push(barrelTex.albedo, barrelTex.bump);
+  const groundRepeat =
+    map.id === 'helios-outpost' ? 78 : map.id === 'borealis-citadel' ? 72 : 115;
+  const groundPbr = getOrLoadPbrMaps(groundFolder, groundRepeat, groundRepeat, renderer);
+  const metalPbr = getOrLoadPbrMaps('metal_panel', 2, 1, renderer);
+  const metalDetailPbr = getOrLoadPbrMaps('metal_panel', 3, 2, renderer);
 
   const aoTex = createContactAoTexture();
-  disposables.push(aoTex);
+  const moteTex = createSoftParticleTexture();
+  disposables.push(aoTex, moteTex);
 
   const aoMat = new THREE.MeshBasicMaterial({
     map: aoTex,
@@ -645,16 +483,17 @@ export function buildArenaMapScene(
   });
   disposables.push(aoMat);
 
-  // Extended terrain beyond playable bounds
+  // Extended terrain beyond playable bounds with real PBR normal + roughness maps
   const terrainGeo = new THREE.PlaneGeometry(420, 420);
   terrainGeo.rotateX(-Math.PI / 2);
   const terrainMat = new THREE.MeshStandardMaterial({
-    map: groundTex.albedo,
-    bumpMap: groundTex.bump,
-    bumpScale: 0.045,
+    map: groundPbr.map,
+    normalMap: groundPbr.normalMap,
+    normalScale: new THREE.Vector2(1.15, 1.15),
+    roughnessMap: groundPbr.roughnessMap,
     color: 0xffffff,
-    roughness: texKind === 'arctic' ? 0.65 : 0.85,
-    metalness: 0.1,
+    roughness: map.id === 'borealis-citadel' ? 0.55 : 0.9,
+    metalness: map.id === 'obsidian-foundry' ? 0.22 : 0.08,
   });
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
   terrainMesh.position.y = 0;
@@ -663,44 +502,46 @@ export function buildArenaMapScene(
   collidableMeshes.push(terrainMesh);
   disposables.push(terrainGeo, terrainMat);
 
-  // Center tactical arena court ring & lane markings on floor
-  const courtRingGeo = new THREE.RingGeometry(11.6, 12.1, 48);
+  // Center tactical arena court ring & outer perimeter track on floor
+  const courtRingGeo = new THREE.RingGeometry(11.6, 12.15, 56);
   courtRingGeo.rotateX(-Math.PI / 2);
   const courtRingMat = new THREE.MeshBasicMaterial({
     color: map.accentColor,
     transparent: true,
-    opacity: 0.38,
+    opacity: 0.44,
   });
   const courtRing = new THREE.Mesh(courtRingGeo, courtRingMat);
-  courtRing.position.y = 0.02;
+  courtRing.position.y = 0.022;
   root.add(courtRing);
   disposables.push(courtRingGeo, courtRingMat);
 
-  // Shared Architectural Materials
+  // Shared Architectural PBR Materials using real metal normal/roughness maps
   const steelMat = new THREE.MeshStandardMaterial({
-    color: 0x334155,
-    roughness: 0.4,
+    color: 0x475569,
+    normalMap: metalDetailPbr.normalMap,
+    roughnessMap: metalDetailPbr.roughnessMap,
+    roughness: 0.55,
     metalness: 0.72,
   });
   const darkMat = new THREE.MeshStandardMaterial({
     color: 0x18181b,
-    roughness: 0.62,
-    metalness: 0.48,
+    roughness: 0.6,
+    metalness: 0.5,
   });
   const trimMat = new THREE.MeshStandardMaterial({
     color: map.accentColor,
     emissive: map.accentColor,
-    emissiveIntensity: 0.85,
-    roughness: 0.25,
+    emissiveIntensity: 1.35,
+    roughness: 0.22,
     metalness: 0.45,
   });
   const containerMat = new THREE.MeshStandardMaterial({
-    map: corrTex.albedo,
-    bumpMap: corrTex.bump,
-    bumpScale: 0.09,
-    color: map.id === 'helios-outpost' ? '#9a5b32' : map.id === 'borealis-citadel' ? '#0284c7' : '#64748b',
-    roughness: 0.56,
-    metalness: 0.35,
+    map: metalPbr.map,
+    normalMap: metalPbr.normalMap,
+    roughnessMap: metalPbr.roughnessMap,
+    color: map.id === 'helios-outpost' ? '#b46b3e' : map.id === 'borealis-citadel' ? '#0ea5e9' : '#94a3b8',
+    roughness: 0.68,
+    metalness: 0.42,
   });
   disposables.push(steelMat, darkMat, trimMat, containerMat);
 
@@ -726,9 +567,9 @@ export function buildArenaMapScene(
     disposables.push(cg);
 
     const tg = new THREE.BoxGeometry(
-      cw > cd ? cw * 0.96 : 0.16,
+      cw > cd ? cw * 0.96 : 0.18,
       0.12,
-      cd > cw ? cd * 0.96 : 0.16,
+      cd > cw ? cd * 0.96 : 0.18,
     );
     const tm = new THREE.Mesh(tg, trimMat);
     tm.position.set(cx, curbHeight + 0.06, cz);
@@ -736,14 +577,13 @@ export function buildArenaMapScene(
     disposables.push(tg);
   }
 
-  // Organic Displaced Cliff / Mountain Ridge Ring (3 variations instanced for realism)
+  // Organic Displaced Cliff / Mountain Ridge Ring
   const cliffColor =
     map.id === 'helios-outpost' ? 0x9f5630 : map.id === 'borealis-citadel' ? 0x475569 : 0x2f3747;
   const cliffMat = new THREE.MeshStandardMaterial({
     color: cliffColor,
-    bumpMap: groundTex.bump,
-    bumpScale: 0.06,
-    roughness: 0.9,
+    normalMap: groundPbr.normalMap,
+    roughness: 0.92,
     metalness: 0.06,
     flatShading: true,
   });
@@ -782,24 +622,24 @@ export function buildArenaMapScene(
 
   // Structural Map Boxes + Rich Architectural Dressing
   const defaultBoxMat = new THREE.MeshStandardMaterial({
-    map: panelTex.albedo,
-    bumpMap: panelTex.bump,
-    bumpScale: 0.055,
-    color: 0xffffff,
-    roughness: 0.58,
-    metalness: 0.34,
+    map: metalDetailPbr.map,
+    normalMap: metalDetailPbr.normalMap,
+    roughnessMap: metalDetailPbr.roughnessMap,
+    color: map.structureTint,
+    roughness: 0.65,
+    metalness: 0.38,
   });
   disposables.push(defaultBoxMat);
 
   for (const b of map.boxes) {
     const mat = b.color
       ? new THREE.MeshStandardMaterial({
-          map: panelTex.albedo,
-          bumpMap: panelTex.bump,
-          bumpScale: 0.05,
+          map: metalDetailPbr.map,
+          normalMap: metalDetailPbr.normalMap,
+          roughnessMap: metalDetailPbr.roughnessMap,
           color: b.color,
-          roughness: b.kind === 'tower' ? 0.48 : 0.65,
-          metalness: b.kind === 'tower' ? 0.45 : 0.28,
+          roughness: b.kind === 'tower' ? 0.55 : 0.72,
+          metalness: b.kind === 'tower' ? 0.45 : 0.25,
         })
       : defaultBoxMat;
     if (b.color) disposables.push(mat);
@@ -816,6 +656,7 @@ export function buildArenaMapScene(
     addArchitecturalDetail(
       b,
       root,
+      radarDishes,
       disposables,
       steelMat,
       trimMat,
@@ -826,14 +667,14 @@ export function buildArenaMapScene(
     );
   }
 
-  // Ramps with Tread Surface & Yellow Guide Curbs
+  // Ramps with Tread Surface
   const rampMat = new THREE.MeshStandardMaterial({
-    map: panelTex.albedo,
-    bumpMap: panelTex.bump,
-    bumpScale: 0.05,
+    map: metalDetailPbr.map,
+    normalMap: metalDetailPbr.normalMap,
+    roughnessMap: metalDetailPbr.roughnessMap,
     color: map.structureTint,
-    roughness: 0.52,
-    metalness: 0.42,
+    roughness: 0.58,
+    metalness: 0.44,
   });
   disposables.push(rampMat);
   for (const r of map.ramps) {
@@ -843,15 +684,15 @@ export function buildArenaMapScene(
     disposables.push(rampMesh.geometry);
   }
 
-  // Jump Pads (3-part composite grounded emitter + soft point light)
-  const padBaseGeo = new THREE.CylinderGeometry(1.55, 1.8, 0.24, 24);
+  // Jump Pads (3-part composite grounded emitter + glowing torus)
+  const padBaseGeo = new THREE.CylinderGeometry(1.55, 1.85, 0.24, 24);
   const padRingGeo = new THREE.TorusGeometry(1.18, 0.11, 10, 28);
   const padCoreGeo = new THREE.CylinderGeometry(0.95, 0.95, 0.08, 24);
   const padGlowMat = new THREE.MeshStandardMaterial({
     color: 0x06b6d4,
     emissive: 0x06b6d4,
-    emissiveIntensity: 1.6,
-    roughness: 0.2,
+    emissiveIntensity: 1.9,
+    roughness: 0.18,
     metalness: 0.5,
   });
   disposables.push(padBaseGeo, padRingGeo, padCoreGeo, padGlowMat);
@@ -876,61 +717,73 @@ export function buildArenaMapScene(
     root.add(padGroup);
   }
 
-  // Dynamic Rigid-Body Crates & Rolling Hazard Barrels
-  const crateMat = new THREE.MeshStandardMaterial({
-    map: crateTex.albedo,
-    bumpMap: crateTex.bump,
-    bumpScale: 0.08,
-    color: 0xffffff,
-    roughness: 0.48,
-    metalness: 0.44,
+  // Dynamic Rigid-Body Crates & Explosive Barrels (Real Poly Haven GLTF meshes when loaded)
+  const fallbackCrateMat = new THREE.MeshStandardMaterial({
+    map: metalPbr.map,
+    normalMap: metalPbr.normalMap,
+    color: 0x94a3b8,
+    roughness: 0.5,
+    metalness: 0.45,
   });
-  const barrelMat = new THREE.MeshStandardMaterial({
-    map: barrelTex.albedo,
-    bumpMap: barrelTex.bump,
-    bumpScale: 0.08,
-    color: 0xffffff,
+  const fallbackBarrelMat = new THREE.MeshStandardMaterial({
+    color: 0xc2410c,
     roughness: 0.42,
     metalness: 0.58,
   });
-  disposables.push(crateMat, barrelMat);
+  disposables.push(fallbackCrateMat, fallbackBarrelMat);
 
   for (const c of map.crates) {
     const kind = c.kind ?? 'crate';
-    const geo =
-      kind === 'barrel'
-        ? new THREE.CylinderGeometry(c.size * 0.36, c.size * 0.36, c.size * 1.15, 16)
-        : new THREE.BoxGeometry(c.size, c.size, c.size);
-    const mesh = new THREE.Mesh(geo, kind === 'barrel' ? barrelMat : crateMat);
-    mesh.position.set(c.x, c.y, c.z);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.userData.crateId = c.id;
-    root.add(mesh);
-    crateMeshes.set(c.id, mesh);
-    collidableMeshes.push(mesh);
-    disposables.push(geo);
+    const gltfProp = assetRegistry.instantiateDynamicProp(kind, c.size);
+    if (gltfProp) {
+      gltfProp.position.set(c.x, c.y, c.z);
+      gltfProp.userData.crateId = c.id;
+      gltfProp.traverse((child) => {
+        const m = child as THREE.Mesh;
+        if (m.isMesh) {
+          m.userData.crateId = c.id;
+          collidableMeshes.push(m);
+        }
+      });
+      root.add(gltfProp);
+      crateMeshes.set(c.id, gltfProp);
+    } else {
+      const geo =
+        kind === 'barrel'
+          ? new THREE.CylinderGeometry(c.size * 0.36, c.size * 0.36, c.size * 1.15, 16)
+          : new THREE.BoxGeometry(c.size, c.size, c.size);
+      const mesh = new THREE.Mesh(geo, kind === 'barrel' ? fallbackBarrelMat : fallbackCrateMat);
+      mesh.position.set(c.x, c.y, c.z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData.crateId = c.id;
+      root.add(mesh);
+      crateMeshes.set(c.id, mesh);
+      collidableMeshes.push(mesh);
+      disposables.push(geo);
+    }
   }
 
-  // Web-sourced GLB Props (CesiumMilkTruck.glb + DamagedHelmet.glb) + Grounded Contact Shadow
+  // Web-sourced Poly Haven + Khronos GLTF Environment Props with Auto-Grounding & Contact AO
   for (const prop of map.glbProps) {
-    if (prop.model === 'truck') {
-      const aoGeo = new THREE.PlaneGeometry(5.6, 3.2);
-      aoGeo.rotateX(-Math.PI / 2);
-      const aoMesh = new THREE.Mesh(aoGeo, aoMat);
-      aoMesh.position.set(prop.x, prop.y + 0.015, prop.z);
-      aoMesh.rotation.y = prop.rotY;
-      root.add(aoMesh);
-      disposables.push(aoGeo);
-    }
-
     const asset = assetRegistry.getCached(prop.model);
     if (asset) {
+      const wrapper = new THREE.Group();
       const clone = asset.scene.clone(true);
-      clone.position.set(prop.x, prop.y, prop.z);
-      clone.rotation.y = prop.rotY;
       clone.scale.setScalar(prop.scale);
-      clone.traverse((child) => {
+
+      // Measure bounding box so bottom sits flush on prop.y
+      clone.updateMatrixWorld(true);
+      const bbox = new THREE.Box3().setFromObject(clone);
+      if (prop.model !== 'helmet') {
+        clone.position.y -= bbox.min.y;
+      }
+
+      wrapper.position.set(prop.x, prop.y, prop.z);
+      wrapper.rotation.y = prop.rotY;
+      wrapper.add(clone);
+
+      wrapper.traverse((child) => {
         const m = child as THREE.Mesh;
         if (m.isMesh) {
           m.castShadow = true;
@@ -938,9 +791,19 @@ export function buildArenaMapScene(
           collidableMeshes.push(m);
         }
       });
-      root.add(clone);
+      root.add(wrapper);
+
       if (prop.model === 'helmet') {
-        relicGroup = clone;
+        relicGroup = wrapper;
+      } else if (prop.model === 'barrier' || prop.model === 'container' || prop.model === 'rock') {
+        const aoSize = prop.model === 'rock' ? 4.2 : 3.2;
+        const aoGeo = new THREE.PlaneGeometry(aoSize, aoSize * 0.65);
+        aoGeo.rotateX(-Math.PI / 2);
+        const aoMesh = new THREE.Mesh(aoGeo, aoMat);
+        aoMesh.position.set(prop.x, prop.y + 0.015, prop.z);
+        aoMesh.rotation.y = prop.rotY;
+        root.add(aoMesh);
+        disposables.push(aoGeo);
       }
     } else if (prop.model === 'helmet') {
       const fallback = new THREE.Mesh(new THREE.OctahedronGeometry(0.65, 0), trimMat);
@@ -948,20 +811,38 @@ export function buildArenaMapScene(
       root.add(fallback);
       relicGroup = fallback;
       disposables.push(fallback.geometry);
-    } else if (prop.model === 'truck') {
-      const g = new THREE.Group();
-      g.position.set(prop.x, prop.y, prop.z);
-      g.rotation.y = prop.rotY;
-      const hull = new THREE.Mesh(new THREE.BoxGeometry(4.6, 2.2, 2.3), darkMat);
-      hull.position.y = 1.3;
-      const cab = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.5, 2.1), trimMat);
-      cab.position.set(2.0, 0.95, 0);
-      g.add(hull, cab);
-      root.add(g);
-      collidableMeshes.push(hull, cab);
-      disposables.push(hull.geometry, cab.geometry);
     }
   }
+
+  // Atmospheric Biome Motes (Embers / Desert Dust / Arctic Snow Flurries)
+  const moteCount = 160;
+  const motePos = new Float32Array(moteCount * 3);
+  const randMote = seededRand(909);
+  for (let i = 0; i < moteCount; i++) {
+    motePos[i * 3] = (randMote() - 0.5) * map.halfExtent * 2.1;
+    motePos[i * 3 + 1] = 0.5 + randMote() * 14;
+    motePos[i * 3 + 2] = (randMote() - 0.5) * map.halfExtent * 2.1;
+  }
+  const moteGeo = new THREE.BufferGeometry();
+  moteGeo.setAttribute('position', new THREE.BufferAttribute(motePos, 3));
+  const moteColor =
+    map.id === 'borealis-citadel'
+      ? 0xe0f2fe
+      : map.id === 'helios-outpost'
+        ? 0xfde68a
+        : 0xfdba74;
+  const moteMat = new THREE.PointsMaterial({
+    map: moteTex,
+    color: moteColor,
+    size: map.id === 'borealis-citadel' ? 0.34 : 0.26,
+    transparent: true,
+    opacity: 0.65,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const ambientMotes = new THREE.Points(moteGeo, moteMat);
+  root.add(ambientMotes);
+  disposables.push(moteGeo, moteMat);
 
   scene.add(root);
 
@@ -969,6 +850,8 @@ export function buildArenaMapScene(
     root,
     crateMeshes,
     jumpPadRings,
+    radarDishes,
+    ambientMotes,
     relicGroup,
     collidableMeshes,
     dispose: () => {

@@ -12,6 +12,7 @@ import { WEAPON_ORDER, WEAPONS } from '../shared/weapons';
 interface MobileControlsProps {
   activeWeapon: WeaponId;
   adsHeld: boolean;
+  rotatedLandscape?: boolean;
   onMove: (x: number, y: number, sprint: boolean) => void;
   onLook: (dx: number, dy: number) => void;
   onFireChange: (firing: boolean) => void;
@@ -28,6 +29,7 @@ interface MobileControlsProps {
 export const MobileControls: React.FC<MobileControlsProps> = ({
   activeWeapon,
   adsHeld,
+  rotatedLandscape = false,
   onMove,
   onLook,
   onFireChange,
@@ -64,8 +66,11 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   };
 
   const updateJoy = (clientX: number, clientY: number) => {
-    const dx = clientX - joyOrigin.current.x;
-    const dy = clientY - joyOrigin.current.y;
+    const vdx = clientX - joyOrigin.current.x;
+    const vdy = clientY - joyOrigin.current.y;
+    // When parent <main> is rotated 90deg clockwise, viewport (+vx,+vy) maps to local (+vy,-vx)
+    const dx = rotatedLandscape ? vdy : vdx;
+    const dy = rotatedLandscape ? -vdx : vdy;
     const dist = Math.hypot(dx, dy);
     const clamped = Math.min(dist, MAX_RADIUS);
     const angle = Math.atan2(dy, dx);
@@ -102,9 +107,11 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   const handleLookMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (lookPointerId.current !== e.pointerId) return;
     e.stopPropagation();
-    const dx = e.clientX - lastLook.current.x;
-    const dy = e.clientY - lastLook.current.y;
+    const vdx = e.clientX - lastLook.current.x;
+    const vdy = e.clientY - lastLook.current.y;
     lastLook.current = { x: e.clientX, y: e.clientY };
+    const dx = rotatedLandscape ? vdy : vdx;
+    const dy = rotatedLandscape ? -vdx : vdy;
     onLook(dx * 1.45, dy * 1.45);
   };
 
@@ -115,7 +122,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-20 pointer-events-none select-none">
+    <div className="absolute inset-0 z-20 pointer-events-none select-none">
       {/* Right-half touch aim surface (behind action buttons) */}
       <div
         className="absolute right-0 top-14 bottom-0 w-[56%] pointer-events-auto touch-none"
@@ -126,7 +133,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
         onPointerCancel={handleLookUp}
       />
 
-      {/* Left-Thumb Secondary Quick-Fire Button (for two-thumb claw/aim+fire play) */}
+      {/* Left-Thumb Secondary Quick-Fire Button */}
       <button
         type="button"
         onPointerDown={(e) => {
@@ -167,8 +174,8 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
         </div>
       </div>
 
-      {/* Bottom-Center Horizontal Weapon Selector Strip (Landscape mobile & tablet) */}
-      <div className="hidden sm:flex items-center gap-1.5 absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-auto">
+      {/* Bottom-Center Horizontal Weapon Selector Strip */}
+      <div className="hidden @2xl:flex items-center gap-1.5 absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-auto">
         {WEAPON_ORDER.map((wId) => {
           const spec = WEAPONS[wId];
           const active = wId === activeWeapon;
@@ -195,7 +202,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
 
       {/* Right Thumb Shooter Control Arc (>= 44px touch targets) */}
       <div className="absolute right-4 bottom-3 flex flex-col items-end gap-2 pointer-events-none">
-        {/* Upper Tactical Row: Chat, Swap (portrait fallback), Reload, Slide, Jump */}
+        {/* Upper Tactical Row: Chat, Swap, Reload, Slide, Jump */}
         <div className="flex items-center gap-2 pointer-events-auto">
           <button
             type="button"
@@ -215,7 +222,7 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
               onSwapWeapon();
             }}
             aria-label="Switch weapon"
-            className="sm:hidden h-11 px-2.5 rounded-xl bg-zinc-900/85 border border-zinc-600/80 text-[11px] font-bold text-zinc-100 active:scale-95"
+            className="@2xl:hidden h-11 px-2.5 rounded-xl bg-zinc-900/85 border border-zinc-600/80 text-[11px] font-bold text-zinc-100 active:scale-95"
           >
             SWAP
           </button>

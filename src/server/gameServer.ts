@@ -18,6 +18,7 @@ import {
   createInitialMoveState,
   stepCharacterMovement,
 } from '../game/physicsMovement';
+import { BotTacticalMemory, evaluateBotStep } from './botAi';
 
 interface ConnectedClient {
   id: string;
@@ -30,11 +31,7 @@ interface ConnectedClient {
 interface BotAgent {
   state: NetPlayerState;
   move: CharacterMoveState;
-  patrolTarget: [number, number];
-  fireCooldown: number;
-  strafeSign: number;
-  strafeTimer: number;
-  jumpTimer: number;
+  memory: BotTacticalMemory;
 }
 
 interface RoomInternal {
@@ -519,7 +516,7 @@ export class ArenaGameServer {
       const sp = map.spawnPoints[(room.players.size + room.bots.size + idx) % map.spawnPoints.length];
       idx++;
       const characterId: CharacterId = idx % 2 === 0 ? 'vanguard-soldier' : 'apex-mech';
-      const weaponList: WeaponId[] = ['pulse-carbine', 'rail-rifle', 'scatter-gun'];
+      const weaponList: WeaponId[] = ['pulse-carbine', 'rail-rifle', 'scatter-gun', 'frag-launcher'];
       const weaponId = weaponList[idx % weaponList.length];
       const botName = BOT_CALLSIGNS[(room.bots.size + idx) % BOT_CALLSIGNS.length];
       const state: NetPlayerState = {
@@ -550,11 +547,18 @@ export class ArenaGameServer {
       room.bots.set(botId, {
         state,
         move: createInitialMoveState(sp.x, sp.y, sp.z, sp.yaw),
-        patrolTarget: [0, 0],
-        fireCooldown: 0.8 + Math.random() * 0.8,
-        strafeSign: Math.random() > 0.5 ? 1 : -1,
-        strafeTimer: 1.5,
-        jumpTimer: 2 + Math.random() * 3,
+        memory: {
+          patrolTarget: [0, 0],
+          patrolTimer: 1 + Math.random() * 2,
+          fireCooldown: 0.7 + Math.random() * 0.7,
+          reactionDelay: 0.25,
+          strafeSign: Math.random() > 0.5 ? 1 : -1,
+          strafeTimer: 1.2,
+          jumpTimer: 2 + Math.random() * 2.5,
+          hurtEvadeTimer: 0,
+          hadLosPrev: false,
+          lastKnownTargetPos: null,
+        },
       });
     }
     room.info.botCount = room.bots.size;
@@ -595,6 +599,9 @@ export class ArenaGameServer {
     const bot = room.bots.get(target.id);
     if (bot) {
       bot.move = createInitialMoveState(sp.x, sp.y, sp.z, sp.yaw);
+      bot.memory.hadLosPrev = false;
+      bot.memory.lastKnownTargetPos = null;
+      bot.memory.hurtEvadeTimer = 0;
     }
   }
 
@@ -664,6 +671,12 @@ export class ArenaGameServer {
     if (Date.now() < protectUntil) return;
 
     target.hp = Math.max(0, target.hp - damage);
+    const hurtBot = room.bots.get(target.id);
+    if (hurtBot && target.hp > 0) {
+      hurtBot.memory.hurtEvadeTimer = 0.65;
+      hurtBot.memory.strafeSign = Math.random() > 0.5 ? 1 : -1;
+      hurtBot.memory.lastKnownTargetPos = [attacker.x, attacker.y, attacker.z];
+    }
     this.broadcastRoom(room, {
       type: 'player:damaged',
       targetId: target.id,
@@ -771,91 +784,21 @@ export class ArenaGameServer {
     for (const bot of room.bots.values()) {
       if (!bot.state.alive) continue;
 
-      // Find nearest alive opponent
-      let nearest: NetPlayerState | null = null;
-      let nearestDist = Infinity;
-      for (const other of allParticipants) {
-        if (other.id === bot.state.id || !other.alive) continue;
-        const d = Math.hypot(other.x - bot.state.x, other.z - bot.state.z);
-        if (d < nearestDist) {
-          nearestDist = d;
-          nearest = other;
-        }
+      const decision = evaluateBotStep(bot.state, bot.move, bot.memory, allParticipants, map, dt);
+
+      if (decision.shouldFire) {
+        this.processWeaponFire(
+          room,
+          bot.state,
+          bot.state.weaponId,
+          decision.fireOrigin,
+          decision.fireDir,
+          decision.didHit ? decision.targetId : undefined,
+          decision.hitPoint,
+        );
       }
 
-      bot.strafeTimer -= dt;
-      if (bot.strafeTimer <= 0) {
-        bot.strafeTimer = 1.2 + Math.random() * 1.4;
-        bot.strafeSign = Math.random() > 0.5 ? 1 : -1;
-      }
-
-      bot.jumpTimer -= dt;
-      let jumpJustPressed = false;
-      if (bot.jumpTimer <= 0) {
-        bot.jumpTimer = 2.6 + Math.random() * 2.5;
-        jumpJustPressed = true;
-      }
-
-      let targetYaw = bot.move.yaw;
-      let forward = 0.7;
-      let right = 0.45 * bot.strafeSign;
-
-      if (nearest) {
-        const dx = nearest.x - bot.state.x;
-        const dz = nearest.z - bot.state.z;
-        // Yaw=0 faces -Z; atan2(-dx, -dz) aligns character facing target
-        targetYaw = Math.atan2(-dx, -dz);
-        if (nearestDist < 9) {
-          forward = -0.35;
-          right = 0.85 * bot.strafeSign;
-        } else if (nearestDist < 18) {
-          forward = 0.25;
-          right = 0.75 * bot.strafeSign;
-        } else {
-          forward = 1.0;
-          right = 0.25 * bot.strafeSign;
-        }
-
-        // Fire periodically when in line of sight range
-        bot.fireCooldown -= dt;
-        if (bot.fireCooldown <= 0 && nearestDist < 34) {
-          const spec = WEAPONS[bot.state.weaponId];
-          bot.fireCooldown = Math.max(0.85, spec.fireInterval * 4.2) + Math.random() * 0.7;
-          const aimDist = Math.max(1, nearestDist);
-          const hitChance = Math.max(0.12, 0.34 - aimDist * 0.007);
-          const origin: [number, number, number] = [bot.state.x, bot.state.y + 1.5, bot.state.z];
-          const dy = nearest.y + 1.1 - origin[1];
-          const len = Math.hypot(dx, dy, dz) || 1;
-          const dir: [number, number, number] = [dx / len, dy / len, dz / len];
-          const didHit = Math.random() < hitChance;
-          this.processWeaponFire(
-            room,
-            bot.state,
-            bot.state.weaponId,
-            origin,
-            dir,
-            didHit ? nearest.id : undefined,
-            didHit ? [nearest.x, nearest.y + 1.1, nearest.z] : undefined,
-          );
-        }
-      }
-
-      stepCharacterMovement(
-        bot.move,
-        {
-          forward,
-          right,
-          yaw: targetYaw,
-          pitch: 0,
-          jumpHeld: jumpJustPressed,
-          jumpJustPressed,
-          sprintHeld: nearestDist > 18,
-          crouchHeld: false,
-          dashJustPressed: false,
-        },
-        map,
-        dt,
-      );
+      stepCharacterMovement(bot.move, decision.moveInput, map, dt);
 
       bot.state.x = bot.move.x;
       bot.state.y = bot.move.y;
@@ -864,6 +807,8 @@ export class ArenaGameServer {
       bot.state.vy = bot.move.vy;
       bot.state.vz = bot.move.vz;
       bot.state.yaw = bot.move.yaw;
+      bot.state.crouching = bot.move.crouching;
+      bot.state.sliding = bot.move.sliding;
       bot.state.grounded = bot.move.grounded;
     }
   }

@@ -20,7 +20,7 @@ export const PauseModal: React.FC<PauseModalProps> = ({
   onLeaveMatch,
 }) => {
   return (
-    <div className="fixed inset-0 z-30 bg-black/75 flex items-center justify-center p-4">
+    <div className="absolute inset-0 z-30 bg-black/75 flex items-center justify-center p-4">
       <div className="w-full max-w-sm bg-zinc-950 border border-zinc-800 rounded-xl p-5 space-y-4">
         <div>
           <h2 className="font-display text-xl font-bold text-zinc-100">Match Paused</h2>
@@ -100,7 +100,7 @@ export const OutcomeModal: React.FC<OutcomeModalProps> = ({
   const mapName = ARENA_MAPS[summary.mapId]?.name ?? summary.mapId;
 
   return (
-    <div className="fixed inset-0 z-30 bg-black/80 flex items-center justify-center p-4">
+    <div className="absolute inset-0 z-30 bg-black/80 flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-zinc-950 border border-zinc-800 rounded-xl p-6 space-y-5">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400">

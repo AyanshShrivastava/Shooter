@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ARENA_MAPS, ArenaMapSpec } from '../shared/maps';
 import {
   AppScreenState,
@@ -160,6 +164,8 @@ export class ArenaEngine {
   private callbacks: EngineCallbacks;
   private isSoftwareGl: boolean;
   private renderer: THREE.WebGLRenderer;
+  private composer: EffectComposer | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private disposeEnv: () => void;
@@ -284,7 +290,17 @@ export class ArenaEngine {
     this.muzzleLight.position.set(0.22, -0.15, -0.9);
     this.camera.add(this.muzzleLight);
 
-    this.disposeEnv = setupSceneEnvironment(this.scene, this.renderer);
+    this.disposeEnv = setupSceneEnvironment(this.scene, this.renderer, this.currentMap);
+
+    if (!this.isSoftwareGl) {
+      const w = container.clientWidth || window.innerWidth;
+      const h = container.clientHeight || window.innerHeight;
+      this.composer = new EffectComposer(this.renderer);
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.34, 0.38, 0.92);
+      this.composer.addPass(this.bloomPass);
+      this.composer.addPass(new OutputPass());
+    }
 
     this.contactShadowTex = createContactShadowTexture();
     this.contactShadowMat = new THREE.MeshBasicMaterial({
@@ -294,8 +310,8 @@ export class ArenaEngine {
       depthWrite: false,
     });
 
-    // Pooled particles
-    const pGeo = new THREE.BoxGeometry(0.18, 0.18, 0.18);
+    // Pooled sparks / debris
+    const pGeo = new THREE.OctahedronGeometry(0.085, 0);
     const pMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     this.particleMesh = new THREE.InstancedMesh(pGeo, pMat, this.MAX_PARTICLES);
     this.particleMesh.frustumCulled = false;
@@ -422,6 +438,8 @@ export class ArenaEngine {
     }
     this.clearProjectiles();
 
+    this.disposeEnv();
+    this.disposeEnv = setupSceneEnvironment(this.scene, this.renderer, spec);
     this.builtMap = buildArenaMapScene(this.scene, spec, this.renderer, this.isSoftwareGl);
     this.physicsWorld = createArenaPhysicsWorld(spec);
 
@@ -735,7 +753,17 @@ export class ArenaEngine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
-    this.renderer.render(this.scene, this.camera);
+    if (this.composer) {
+      this.composer.setSize(w, h);
+    }
+    if (this.bloomPass) {
+      this.bloomPass.resolution.set(w, h);
+    }
+    if (this.composer) {
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -1056,11 +1084,17 @@ export class ArenaEngine {
 
     const simDt = this.hitstopTimer > 0 ? dt * 0.08 : dt;
 
-    // Update arena animations (jump pads + spinning artifact)
+    // Update arena animations (jump pads, radar arrays, biome motes, spinning artifact)
     if (this.builtMap) {
       const t = this.clock.elapsedTime;
       for (const ring of this.builtMap.jumpPadRings) {
         ring.position.y = 0.45 + Math.sin(t * 4.5) * 0.14;
+      }
+      for (const dish of this.builtMap.radarDishes) {
+        dish.rotation.y += dt * 0.65;
+      }
+      if (this.builtMap.ambientMotes) {
+        this.builtMap.ambientMotes.rotation.y += dt * 0.03;
       }
       if (this.builtMap.relicGroup) {
         this.builtMap.relicGroup.rotation.y += dt * 0.9;
@@ -1087,7 +1121,11 @@ export class ArenaEngine {
     this.updateRemoteActors(dt);
     this.updateParticlesAndTracers(dt);
 
-    this.renderer.render(this.scene, this.camera);
+    if (this.composer) {
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
 
     if (this.isSoftwareGl) {
       this.afterDraw(this.tick);
@@ -1539,6 +1577,7 @@ export class ArenaEngine {
     this.projGeo.dispose();
     this.projMat.dispose();
     this.disposeEnv();
+    this.composer?.dispose();
     this.renderer.dispose();
 
     if (this.renderer.domElement.parentNode === this.container) {

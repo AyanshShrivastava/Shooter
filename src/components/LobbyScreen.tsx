@@ -90,13 +90,13 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-10 flex flex-col justify-between gap-2 sm:gap-3 p-2.5 sm:p-4 md:p-6 pointer-events-none">
+    <div className="absolute inset-0 z-10 flex flex-col justify-between gap-2 @2xl:gap-3 p-2.5 @2xl:p-4 @5xl:p-6 pointer-events-none">
       {/* Top Row: Emblem Lockup + Online Network Summary */}
-      <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-4 pointer-events-auto shrink-0">
-        <div className="flex items-center gap-2.5 sm:gap-3.5 bg-zinc-950/88 border border-zinc-800 px-3 py-1.5 sm:px-4 sm:py-2.5 rounded-xl">
+      <div className="flex flex-wrap items-center justify-between gap-2 @2xl:gap-4 pointer-events-auto shrink-0">
+        <div className="flex items-center gap-2.5 @2xl:gap-3.5 bg-zinc-950/88 border border-zinc-800 px-3 py-1.5 @2xl:px-4 @2xl:py-2.5 rounded-xl">
           <svg
             viewBox="0 0 36 36"
-            className="w-7 h-7 sm:w-8 sm:h-8 shrink-0"
+            className="w-7 h-7 @2xl:w-8 @2xl:h-8 shrink-0"
             aria-hidden="true"
           >
             <polygon
@@ -109,10 +109,10 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
             <circle cx="18" cy="14" r="2.2" fill="#06b6d4" />
           </svg>
           <div>
-            <h1 className="font-display text-base sm:text-xl md:text-2xl font-bold tracking-wider text-zinc-50 leading-none">
+            <h1 className="font-display text-base @2xl:text-xl @3xl:text-2xl font-bold tracking-wider text-zinc-50 leading-none">
               VANGUARD ARENA
             </h1>
-            <div className="flex items-center gap-2 text-[11px] sm:text-xs text-zinc-400 mt-0.5 sm:mt-1">
+            <div className="flex items-center gap-2 text-[11px] @2xl:text-xs text-zinc-400 mt-0.5 @2xl:mt-1">
               <span>{connected ? 'Matchmaker Online' : 'Connecting...'}</span>
               <span aria-hidden="true">·</span>
               <span className="font-mono-tabular text-cyan-400">
@@ -123,9 +123,9 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
         </div>
 
         {/* Primary Deploy Action + Callsign */}
-        <div className="flex items-center gap-2 bg-zinc-950/88 border border-zinc-800 p-1.5 sm:p-2 rounded-xl">
-          <div className="flex flex-col px-1.5 sm:px-2">
-            <label htmlFor="callsign-input" className="text-[10px] sm:text-[11px] text-zinc-400 font-medium">
+        <div className="flex items-center gap-2 bg-zinc-950/88 border border-zinc-800 p-1.5 @2xl:p-2 rounded-xl">
+          <div className="flex flex-col px-1.5 @2xl:px-2">
+            <label htmlFor="callsign-input" className="text-[10px] @2xl:text-[11px] text-zinc-400 font-medium">
               Callsign
             </label>
             <input
@@ -135,31 +135,31 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               maxLength={18}
               onChange={(e) => onCallsignChange(e.target.value)}
               placeholder="Enter callsign"
-              className="w-28 sm:w-32 md:w-40 bg-transparent text-xs sm:text-sm font-semibold text-zinc-100 focus:outline-none border-b border-zinc-700 focus:border-amber-500 pb-0.5"
+              className="w-28 @2xl:w-32 @3xl:w-40 bg-transparent text-xs @2xl:text-sm font-semibold text-zinc-100 focus:outline-none border-b border-zinc-700 focus:border-amber-500 pb-0.5"
             />
           </div>
           <button
             type="button"
             data-start="true"
             onClick={onQuickMatch}
-            className="flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 font-display font-bold text-xs sm:text-sm tracking-wide transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="flex items-center gap-1.5 @2xl:gap-2 px-3.5 @2xl:px-5 py-2 @2xl:py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 font-display font-bold text-xs @2xl:text-sm tracking-wide transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current" />
+            <Play className="w-3.5 h-3.5 @2xl:w-4 @2xl:h-4 fill-current" />
             <span>Quick Match</span>
           </button>
         </div>
       </div>
 
-      {/* Main Content Area: Left Tactical Panel + Right Chat (works on both 844x390 landscape phone & 1440x900 desktop) */}
-      <div className="flex-1 min-h-0 flex flex-col md:flex-row md:items-end justify-between gap-3">
-        <div className="w-full md:w-[480px] lg:w-[540px] h-full md:h-auto md:max-h-full lg:max-h-[540px] bg-zinc-950/90 border border-zinc-800 rounded-xl flex flex-col overflow-hidden pointer-events-auto">
+      {/* Main Content Area: Left Tactical Panel + Right Chat */}
+      <div className="flex-1 min-h-0 flex flex-col @3xl:flex-row @3xl:items-end justify-between gap-3">
+        <div className="w-full @3xl:w-[460px] @5xl:w-[540px] h-full @3xl:h-auto @3xl:max-h-full @5xl:max-h-[540px] bg-zinc-950/90 border border-zinc-800 rounded-xl flex flex-col overflow-hidden pointer-events-auto">
           {/* Segmented Navigation Tabs */}
-          <div className="flex flex-wrap items-center justify-between gap-2 p-2 sm:p-2.5 border-b border-zinc-800 bg-zinc-900/70 shrink-0">
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2 @2xl:p-2.5 border-b border-zinc-800 bg-zinc-900/70 shrink-0">
             <div className="flex items-center gap-1 bg-zinc-950 p-1 rounded-lg">
               <button
                 type="button"
                 onClick={() => setActiveTab('servers')}
-                className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                className={`flex items-center gap-1.5 px-2.5 @2xl:px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'servers'
                     ? 'bg-zinc-800 text-amber-400'
                     : 'text-zinc-400 hover:text-zinc-200'
@@ -171,7 +171,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('maps')}
-                className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                className={`flex items-center gap-1.5 px-2.5 @2xl:px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'maps'
                     ? 'bg-zinc-800 text-amber-400'
                     : 'text-zinc-400 hover:text-zinc-200'
@@ -183,7 +183,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('chat')}
-                className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer md:hidden ${
+                className={`flex items-center gap-1.5 px-2.5 @2xl:px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer @3xl:hidden ${
                   activeTab === 'chat'
                     ? 'bg-zinc-800 text-cyan-400'
                     : 'text-zinc-400 hover:text-zinc-200'
@@ -197,7 +197,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
             <button
               type="button"
               onClick={() => setShowCreateModal(true)}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 @2xl:px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5 text-amber-400" />
               <span>Host Server</span>
@@ -340,7 +340,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
             )}
 
             {activeTab === 'chat' && (
-              <div className="flex flex-col h-56 lg:hidden">
+              <div className="flex flex-col h-56 @5xl:hidden">
                 <div className="flex-1 overflow-y-auto tactical-scroll space-y-1.5 pr-1">
                   {globalChat.map((m) => (
                     <div key={m.id} className="text-xs leading-relaxed">
@@ -377,8 +377,8 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           </div>
         </div>
 
-        {/* Side Real-Time Global Chat Panel (visible on landscape mobile md+ and desktop) */}
-        <div className="hidden md:flex w-72 lg:w-88 h-full max-h-60 lg:max-h-72 bg-zinc-950/90 border border-zinc-800 rounded-xl flex-col overflow-hidden pointer-events-auto shrink-0">
+        {/* Side Real-Time Global Chat Panel (visible on landscape mobile @3xl+ and desktop) */}
+        <div className="hidden @3xl:flex w-72 @5xl:w-88 h-full max-h-60 @5xl:max-h-72 bg-zinc-950/90 border border-zinc-800 rounded-xl flex-col overflow-hidden pointer-events-auto shrink-0">
           <div className="px-3.5 py-2 border-b border-zinc-800 bg-zinc-900/70 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
               <MessageSquare className="w-3.5 h-3.5 text-cyan-400" />
@@ -388,7 +388,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               {globalChat.length} msgs
             </span>
           </div>
-          <div className="flex-1 p-2.5 sm:p-3 overflow-y-auto tactical-scroll space-y-1.5">
+          <div className="flex-1 p-2.5 @2xl:p-3 overflow-y-auto tactical-scroll space-y-1.5">
             {globalChat.map((m) => (
               <div key={m.id} className="text-xs leading-relaxed break-words">
                 <span
@@ -427,13 +427,13 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
       </div>
 
       {/* Bottom Safe-Margin Flat Control Hint (hidden on short landscape phones) */}
-      <div className="text-center text-xs text-zinc-400 hud-text-stroke pointer-events-none hidden lg:block shrink-0">
+      <div className="text-center text-xs text-zinc-400 hud-text-stroke pointer-events-none hidden @5xl:block shrink-0">
         WASD Move · Space Jump · Shift Sprint · C Slide · Q Dash · 1-4 Weapons · V 1st/3rd Cam · T Chat
       </div>
 
       {/* Host Custom Server Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-30 bg-black/70 flex items-center justify-center p-4 pointer-events-auto">
+        <div className="absolute inset-0 z-30 bg-black/70 flex items-center justify-center p-4 pointer-events-auto">
           <div className="w-full max-w-md bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
               <h2 className="font-display text-base font-bold text-zinc-100">Host Custom Server</h2>

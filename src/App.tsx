@@ -68,7 +68,6 @@ export default function App() {
     if (typeof window === 'undefined') return false;
     return window.innerHeight > window.innerWidth && Math.min(window.innerWidth, window.innerHeight) < 768;
   });
-  const [rotateDismissed, setRotateDismissed] = useState(false);
 
   const shotsFiredRef = useRef(0);
   const shotsHitRef = useRef(0);
@@ -171,10 +170,12 @@ export default function App() {
 
     const onResize = () => {
       const minDim = Math.min(window.innerWidth, window.innerHeight);
-      if (minDim < 768) {
-        setTouchEnabled(true);
-      }
-      setIsPortraitMobile(window.innerHeight > window.innerWidth && minDim < 768);
+      const hasFinePointer = window.matchMedia?.('(pointer: fine)').matches ?? false;
+      const isCoarseOnly =
+        (window.matchMedia?.('(pointer: coarse)').matches ?? false) && !hasFinePointer;
+      const shouldTouch = isCoarseOnly || minDim < 768;
+      setTouchEnabled(shouldTouch);
+      setIsPortraitMobile(window.innerHeight > window.innerWidth && shouldTouch);
     };
     window.addEventListener('resize', onResize);
 
@@ -340,12 +341,29 @@ export default function App() {
   }, [chatOpen, scoreboardOpen, handleQuickMatch, handleToggleMute, handleTogglePerspective]);
 
   return (
-    <main className="relative w-full h-dvh overflow-hidden bg-zinc-950">
+    <main
+      data-orientation={isPortraitMobile ? 'rotated-landscape' : 'landscape'}
+      className={
+        isPortraitMobile
+          ? '@container fixed top-1/2 left-1/2 overflow-hidden bg-zinc-950 touch-none'
+          : '@container relative w-full h-dvh overflow-hidden bg-zinc-950'
+      }
+      style={
+        isPortraitMobile
+          ? {
+              width: '100dvh',
+              height: '100dvw',
+              transform: 'translate(-50%, -50%) rotate(90deg)',
+              transformOrigin: 'center center',
+            }
+          : undefined
+      }
+    >
       {/* Isolated empty WebGL mount node */}
       <div
         ref={canvasHostRef}
         data-testid="arena-canvas"
-        className="game-canvas-host fixed inset-0 z-0"
+        className="game-canvas-host absolute inset-0 z-0"
       />
 
       {screenState === 'title' && (
@@ -396,6 +414,7 @@ export default function App() {
             <MobileControls
               activeWeapon={hud.weaponId}
               adsHeld={hud.adsHeld}
+              rotatedLandscape={isPortraitMobile}
               onMove={(x, y, sprint) => engineRef.current?.setTouchMove(x, y, sprint)}
               onLook={(dx, dy) => engineRef.current?.addTouchLook(dx, dy)}
               onFireChange={(f) => engineRef.current?.setTouchFiring(f)}
@@ -408,19 +427,6 @@ export default function App() {
               onSelectWeapon={(wId: WeaponId) => engineRef.current?.equipWeapon(wId)}
               onOpenChat={() => setChatOpen((v) => !v)}
             />
-          )}
-
-          {isPortraitMobile && !rotateDismissed && (
-            <div className="fixed inset-x-3 top-14 z-30 flex items-center justify-between gap-2 bg-zinc-950/92 border border-amber-500/70 rounded-xl px-3 py-2 text-xs text-zinc-100 pointer-events-auto">
-              <span>Rotate phone horizontally for wide shooter controls</span>
-              <button
-                type="button"
-                onClick={() => setRotateDismissed(true)}
-                className="px-2.5 py-1 rounded bg-zinc-800 text-amber-400 font-semibold shrink-0"
-              >
-                OK
-              </button>
-            </div>
           )}
         </>
       )}
