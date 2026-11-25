@@ -40,12 +40,15 @@ export interface HudTelemetrySnapshot {
   speedMs: number;
   sliding: boolean;
   crouching: boolean;
+  sprinting: boolean;
   grounded: boolean;
   alive: boolean;
   respawnTimer: number;
   perspective: CameraPerspective;
   hitmarkerKind: 'none' | 'hit' | 'kill';
   damageFlash: number;
+  damageAngle: number | null;
+  killStreak: number;
   pointerLocked: boolean;
   adsHeld: boolean;
   playerPos: [number, number, number];
@@ -217,6 +220,9 @@ export class ArenaEngine {
   private hitmarkerKind: 'none' | 'hit' | 'kill' = 'none';
   private hitmarkerTimer = 0;
   private damageFlash = 0;
+  private damageAngle: number | null = null;
+  private killStreak = 0;
+  private sprinting = false;
   private trauma = 0;
   private lastStrideFootstep = 0;
 
@@ -269,7 +275,7 @@ export class ArenaEngine {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.toneMappingExposure = 1.14;
     this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -297,7 +303,7 @@ export class ArenaEngine {
       const h = container.clientHeight || window.innerHeight;
       this.composer = new EffectComposer(this.renderer);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
-      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.34, 0.38, 0.92);
+      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.3, 0.35, 0.88);
       this.composer.addPass(this.bloomPass);
       this.composer.addPass(new OutputPass());
     }
@@ -483,6 +489,7 @@ export class ArenaEngine {
         this.localRespawnTimer = p.respawnTimer;
         if (!wasAlive && p.alive) {
           this.applyLocalSpawn(p.x, p.y, p.z, p.yaw);
+          this.killStreak = 0;
         }
         continue;
       }
@@ -554,12 +561,23 @@ export class ArenaEngine {
 
   public notifyHitConfirm(isKill: boolean): void {
     this.hitmarkerKind = isKill ? 'kill' : 'hit';
-    this.hitmarkerTimer = isKill ? 0.28 : 0.16;
+    this.hitmarkerTimer = isKill ? 0.32 : 0.16;
     if (isKill) {
+      this.killStreak += 1;
       this.hitstopTimer = 0.035;
       this.trauma = Math.min(1, this.trauma + 0.28);
     }
     tacticalAudio.playHitmarker(isKill);
+  }
+
+  public notifyLocalDamaged(attackerId: string): void {
+    const actor = this.remoteActors.get(attackerId);
+    if (!actor) return;
+    const dx = actor.targetPos.x - this.moveState.x;
+    const dz = actor.targetPos.z - this.moveState.z;
+    const worldAngle = Math.atan2(dx, -dz);
+    // Relative angle in radians (0 = straight ahead, +PI/2 = right, PI = behind)
+    this.damageAngle = worldAngle + this.moveState.yaw;
   }
 
   // Mobile / Touch Input API
@@ -1096,6 +1114,9 @@ export class ArenaEngine {
       if (this.builtMap.ambientMotes) {
         this.builtMap.ambientMotes.rotation.y += dt * 0.03;
       }
+      if (this.builtMap.cloudLayer) {
+        this.builtMap.cloudLayer.rotation.y += dt * 0.006;
+      }
       if (this.builtMap.relicGroup) {
         this.builtMap.relicGroup.rotation.y += dt * 0.9;
       }
@@ -1141,7 +1162,10 @@ export class ArenaEngine {
       this.hitmarkerTimer = Math.max(0, this.hitmarkerTimer - realDt);
       if (this.hitmarkerTimer === 0) this.hitmarkerKind = 'none';
     }
-    if (this.damageFlash > 0) this.damageFlash = Math.max(0, this.damageFlash - realDt * 2.2);
+    if (this.damageFlash > 0) {
+      this.damageFlash = Math.max(0, this.damageFlash - realDt * 2.0);
+      if (this.damageFlash === 0) this.damageAngle = null;
+    }
     if (this.trauma > 0) this.trauma = Math.max(0, this.trauma - realDt * 2.8);
     if (this.muzzleFlashTimer > 0) {
       this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - realDt);
@@ -1166,6 +1190,8 @@ export class ArenaEngine {
         (this.keys.has('KeyA') || this.keys.has('ArrowLeft') ? 1 : 0) +
         this.touchMoveX;
 
+      const sprintHeld = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.touchSprint;
+      this.sprinting = sprintHeld && Math.hypot(forward, right) > 0.2 && !this.moveState.crouching;
       const input: CharacterMoveInput = {
         forward: Math.max(-1, Math.min(1, forward)),
         right: Math.max(-1, Math.min(1, right)),
@@ -1173,7 +1199,7 @@ export class ArenaEngine {
         pitch: this.moveState.pitch,
         jumpHeld: this.keys.has('Space'),
         jumpJustPressed: this.jumpJustPressed,
-        sprintHeld: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.touchSprint,
+        sprintHeld,
         crouchHeld: this.keys.has('KeyC') || this.keys.has('ControlLeft') || this.touchCrouch,
         dashJustPressed: this.dashJustPressed,
       };
@@ -1320,12 +1346,15 @@ export class ArenaEngine {
         speedMs,
         sliding: this.moveState.sliding,
         crouching: this.moveState.crouching,
+        sprinting: this.sprinting,
         grounded: this.moveState.grounded,
         alive: this.localAlive,
         respawnTimer: this.localRespawnTimer,
         perspective: this.perspective,
         hitmarkerKind: this.hitmarkerKind,
         damageFlash: this.damageFlash,
+        damageAngle: this.damageAngle,
+        killStreak: this.killStreak,
         pointerLocked: document.pointerLockElement === this.renderer.domElement,
         adsHeld: this.adsHeld,
         playerPos: [this.moveState.x, this.moveState.y, this.moveState.z],

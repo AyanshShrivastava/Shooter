@@ -8,48 +8,10 @@ export interface BuiltArenaScene {
   jumpPadRings: THREE.Mesh[];
   radarDishes: THREE.Object3D[];
   ambientMotes: THREE.Points | null;
+  cloudLayer: THREE.Object3D | null;
   relicGroup: THREE.Object3D | null;
   collidableMeshes: THREE.Object3D[];
   dispose: () => void;
-}
-
-interface LoadedPbrMaps {
-  map: THREE.Texture;
-  normalMap: THREE.Texture;
-  roughnessMap: THREE.Texture;
-}
-
-const texLoader = new THREE.TextureLoader();
-const pbrCache = new Map<string, LoadedPbrMaps>();
-
-function getOrLoadPbrMaps(
-  folder: 'foundry_floor' | 'metal_panel' | 'canyon_sand' | 'arctic_ice',
-  repeatX: number,
-  repeatY: number,
-  renderer: THREE.WebGLRenderer,
-): LoadedPbrMaps {
-  const cacheKey = `${folder}:${repeatX}:${repeatY}`;
-  const existing = pbrCache.get(cacheKey);
-  if (existing) return existing;
-
-  const maxAniso = renderer.capabilities.getMaxAnisotropy();
-
-  const configure = (tex: THREE.Texture, isColor: boolean) => {
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(repeatX, repeatY);
-    tex.anisotropy = maxAniso;
-    tex.colorSpace = isColor ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-    return tex;
-  };
-
-  const map = configure(texLoader.load(`/textures/${folder}/diff.jpg`), true);
-  const normalMap = configure(texLoader.load(`/textures/${folder}/nor.jpg`), false);
-  const roughnessMap = configure(texLoader.load(`/textures/${folder}/rough.jpg`), false);
-
-  const bundle = { map, normalMap, roughnessMap };
-  pbrCache.set(cacheKey, bundle);
-  return bundle;
 }
 
 function seededRand(seed: number): () => number {
@@ -61,6 +23,151 @@ function seededRand(seed: number): () => number {
   };
 }
 
+/**
+ * Generates a crisp, low-noise architectural panel texture for the playable combat floor
+ * so players, cover silhouettes, and enemy tracers read cleanly under ACES lighting.
+ */
+function createLowPolyFloorMaps(
+  map: ArenaMapSpec,
+  renderer: THREE.WebGLRenderer,
+): { map: THREE.CanvasTexture; roughnessMap: THREE.CanvasTexture } {
+  const size = 256;
+  const cColor = document.createElement('canvas');
+  cColor.width = size;
+  cColor.height = size;
+  const ctx = cColor.getContext('2d')!;
+
+  const cRough = document.createElement('canvas');
+  cRough.width = size;
+  cRough.height = size;
+  const rCtx = cRough.getContext('2d')!;
+
+  const baseHex =
+    map.id === 'helios-outpost'
+      ? '#c89b6e'
+      : map.id === 'borealis-citadel'
+        ? '#cbd5e1'
+        : map.id === 'estate-garden'
+          ? '#3f6212'
+          : map.id === 'safehouse-manor'
+            ? '#78350f'
+            : map.id === 'neon-rooftop'
+              ? '#0f172a'
+              : map.id === 'oasis-temple'
+                ? '#d97706'
+                : '#3c424d';
+  const altHex =
+    map.id === 'helios-outpost'
+      ? '#be8e61'
+      : map.id === 'borealis-citadel'
+        ? '#b8c7d9'
+        : map.id === 'estate-garden'
+          ? '#4d7c0f'
+          : map.id === 'safehouse-manor'
+            ? '#92400e'
+            : map.id === 'neon-rooftop'
+              ? '#1e293b'
+              : map.id === 'oasis-temple'
+                ? '#b45309'
+                : '#353b46';
+  const seamHex =
+    map.id === 'helios-outpost'
+      ? '#9a6e46'
+      : map.id === 'borealis-citadel'
+        ? '#8da2bc'
+        : map.id === 'estate-garden'
+          ? '#84cc16'
+          : map.id === 'safehouse-manor'
+            ? '#451a03'
+            : map.id === 'neon-rooftop'
+              ? '#06b6d4'
+              : map.id === 'oasis-temple'
+                ? '#78350f'
+                : '#242830';
+
+  ctx.fillStyle = baseHex;
+  ctx.fillRect(0, 0, size, size);
+
+  rCtx.fillStyle = map.id === 'borealis-citadel' ? '#9a9a9a' : '#d2d2d2';
+  rCtx.fillRect(0, 0, size, size);
+
+  // Subtle checkerboard slab contrast (low-poly stylized floor)
+  ctx.fillStyle = altHex;
+  ctx.fillRect(0, 0, size / 2, size / 2);
+  ctx.fillRect(size / 2, size / 2, size / 2, size / 2);
+
+  rCtx.fillStyle = map.id === 'borealis-citadel' ? '#7a7a7a' : '#bdbdbd';
+  rCtx.fillRect(0, 0, size / 2, size / 2);
+  rCtx.fillRect(size / 2, size / 2, size / 2, size / 2);
+
+  // Clean architectural slab seams & corner anchor dots
+  ctx.strokeStyle = seamHex;
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, size - 4, size - 4);
+  ctx.beginPath();
+  ctx.moveTo(size / 2, 0);
+  ctx.lineTo(size / 2, size);
+  ctx.moveTo(0, size / 2);
+  ctx.lineTo(size, size / 2);
+  ctx.stroke();
+
+  rCtx.strokeStyle = '#ececec';
+  rCtx.lineWidth = 4;
+  rCtx.strokeRect(2, 2, size - 4, size - 4);
+
+  // Subtle surface micro-speckle (non-noisy)
+  const rand = seededRand(map.id.length * 131);
+  for (let i = 0; i < 60; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const w = 4 + rand() * 8;
+    ctx.fillStyle = rand() > 0.5 ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.045)';
+    ctx.fillRect(x, y, w, w);
+  }
+
+  const maxAniso = renderer.capabilities.getMaxAnisotropy();
+  const repeat = Math.round(map.halfExtent * 0.65);
+
+  const colorTex = new THREE.CanvasTexture(cColor);
+  colorTex.colorSpace = THREE.SRGBColorSpace;
+  colorTex.wrapS = THREE.RepeatWrapping;
+  colorTex.wrapT = THREE.RepeatWrapping;
+  colorTex.repeat.set(repeat, repeat);
+  colorTex.anisotropy = maxAniso;
+
+  const roughTex = new THREE.CanvasTexture(cRough);
+  roughTex.colorSpace = THREE.NoColorSpace;
+  roughTex.wrapS = THREE.RepeatWrapping;
+  roughTex.wrapT = THREE.RepeatWrapping;
+  roughTex.repeat.set(repeat, repeat);
+  roughTex.anisotropy = maxAniso;
+
+  return { map: colorTex, roughnessMap: roughTex };
+}
+
+function createLowPolyArmorBump(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
+  const size = 128;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#808080';
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = '#5a5a5a';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(4, 4, size - 8, size - 8);
+  ctx.fillStyle = '#929292';
+  ctx.fillRect(14, 14, size - 28, 10);
+  ctx.fillRect(14, size - 24, size - 28, 10);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
 function createContactAoTexture(): THREE.CanvasTexture {
   const size = 128;
   const canvas = document.createElement('canvas');
@@ -68,8 +175,8 @@ function createContactAoTexture(): THREE.CanvasTexture {
   canvas.height = size;
   const ctx = canvas.getContext('2d')!;
   const grad = ctx.createRadialGradient(size / 2, size / 2, size * 0.14, size / 2, size / 2, size * 0.5);
-  grad.addColorStop(0, 'rgba(0, 0, 0, 0.62)');
-  grad.addColorStop(0.65, 'rgba(0, 0, 0, 0.24)');
+  grad.addColorStop(0, 'rgba(0, 0, 0, 0.58)');
+  grad.addColorStop(0.62, 'rgba(0, 0, 0, 0.22)');
   grad.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
@@ -101,7 +208,7 @@ function createSkyDome(
   sunColor: string,
   sunPos: THREE.Vector3,
 ): THREE.Mesh {
-  const geo = new THREE.SphereGeometry(260, 32, 20);
+  const geo = new THREE.SphereGeometry(280, 24, 14);
   const sunDir = sunPos.clone().normalize();
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
@@ -128,36 +235,18 @@ function createSkyDome(
       uniform vec3 uSunDir;
       varying vec3 vDir;
 
-      float hash(vec2 p) {
-        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-      }
-      float noise(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-        f = f * f * (3.0 - 2.0 * f);
-        return mix(
-          mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), f.x),
-          mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
-          f.y
-        );
-      }
-
       void main() {
         vec3 d = normalize(vDir);
         float h = clamp(d.y, -0.15, 1.0);
-        float t = smoothstep(-0.02, 0.5, h);
+        // Smooth atmospheric Rayleigh-style vertical transition
+        float t = pow(smoothstep(-0.02, 0.65, h), 0.78);
         vec3 col = mix(uHorizon, uTop, t);
 
-        if (d.y > 0.03) {
-          vec2 uv = d.xz / (d.y + 0.2) * 1.45;
-          float n = noise(uv) * 0.6 + noise(uv * 2.4 + 3.7) * 0.4;
-          float cloudMask = smoothstep(0.54, 0.86, n) * smoothstep(0.03, 0.26, d.y) * 0.38;
-          col = mix(col, mix(uHorizon, vec3(1.0), 0.55), cloudMask);
-        }
-
+        // Warm Mie scatter halo around the sun azimuth
         float sunAmt = max(dot(d, uSunDir), 0.0);
-        col += uSun * pow(sunAmt, 12.0) * 0.42;
-        col += uSun * smoothstep(0.997, 0.9994, sunAmt) * 1.65;
+        col += uSun * pow(sunAmt, 6.0) * 0.24 * (1.0 - smoothstep(0.2, 0.85, h) * 0.5);
+        col += uSun * pow(sunAmt, 24.0) * 0.45;
+        col += uSun * smoothstep(0.9965, 0.9992, sunAmt) * 1.85;
 
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
@@ -168,8 +257,114 @@ function createSkyDome(
   return new THREE.Mesh(geo, mat);
 }
 
+/**
+ * Generates faceted low-poly terrain surrounding the combat arena with vertex-colored elevation bands
+ * (valley floor -> mid slope -> sunlit crest) so natural ridges catch directional sun & sky fill.
+ */
+function createLowPolyOuterTerrain(map: ArenaMapSpec): THREE.BufferGeometry {
+  const geo = new THREE.PlaneGeometry(460, 460, 56, 56);
+  geo.rotateX(-Math.PI / 2);
+
+  // Convert to non-indexed so every triangle gets crisp faceted low-poly normals & vertex colors
+  const nonIndexed = geo.toNonIndexed();
+  geo.dispose();
+
+  const pos = nonIndexed.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const randSeed =
+    map.id === 'helios-outpost'
+      ? 37
+      : map.id === 'borealis-citadel'
+        ? 73
+        : map.id === 'estate-garden'
+          ? 59
+          : map.id === 'safehouse-manor'
+            ? 89
+            : 19;
+
+  const lowCol = new THREE.Color(
+    map.id === 'helios-outpost'
+      ? '#9b5c34'
+      : map.id === 'borealis-citadel'
+        ? '#5b728f'
+        : map.id === 'estate-garden'
+          ? '#2d5016'
+          : map.id === 'safehouse-manor'
+            ? '#292524'
+            : map.id === 'neon-rooftop'
+              ? '#020617'
+              : map.id === 'oasis-temple'
+                ? '#b45309'
+                : '#222731',
+  );
+  const midCol = new THREE.Color(
+    map.id === 'helios-outpost'
+      ? '#b87042'
+      : map.id === 'borealis-citadel'
+        ? '#89a3bf'
+        : map.id === 'estate-garden'
+          ? '#4d7c0f'
+          : map.id === 'safehouse-manor'
+            ? '#57534e'
+            : map.id === 'neon-rooftop'
+              ? '#0f172a'
+              : map.id === 'oasis-temple'
+                ? '#d97706'
+                : '#343c4a',
+  );
+  const peakCol = new THREE.Color(
+    map.id === 'helios-outpost'
+      ? '#d69767'
+      : map.id === 'borealis-citadel'
+        ? '#dce8f5'
+        : map.id === 'estate-garden'
+          ? '#a3e635'
+          : map.id === 'safehouse-manor'
+            ? '#ea580c'
+            : map.id === 'neon-rooftop'
+              ? '#06b6d4'
+              : map.id === 'oasis-temple'
+                ? '#fde68a'
+                : '#4c5566',
+  );
+  const cTmp = new THREE.Color();
+
+  const heightAt = (x: number, z: number) => {
+    const edgeDist = Math.max(Math.abs(x), Math.abs(z)) - (map.halfExtent + 3.5);
+    if (edgeDist <= 0) return -0.04;
+    const blend = Math.min(1, edgeDist / 26);
+    const wave =
+      Math.sin(x * 0.055 + randSeed) * Math.cos(z * 0.05 + randSeed * 0.5) * 6.5 +
+      Math.sin((x + z) * 0.032) * 5.2 +
+      Math.cos((x - z) * 0.09) * 2.1;
+    const ridge = Math.max(0, edgeDist * 0.14 + wave + 3.2);
+    return -0.04 + blend * ridge;
+  };
+
+  for (let i = 0; i < pos.count; i++) {
+    const vx = pos.getX(i);
+    const vz = pos.getZ(i);
+    const vy = heightAt(vx, vz);
+    pos.setY(i, vy);
+
+    const hNorm = Math.max(0, Math.min(1, vy / 24));
+    if (hNorm < 0.45) {
+      cTmp.copy(lowCol).lerp(midCol, hNorm / 0.45);
+    } else {
+      cTmp.copy(midCol).lerp(peakCol, (hNorm - 0.45) / 0.55);
+    }
+    colors[i * 3] = cTmp.r;
+    colors[i * 3 + 1] = cTmp.g;
+    colors[i * 3 + 2] = cTmp.b;
+  }
+
+  nonIndexed.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  nonIndexed.computeVertexNormals();
+  return nonIndexed;
+}
+
 function createDisplacedCliffGeometry(seed: number): THREE.BufferGeometry {
-  const geo = new THREE.IcosahedronGeometry(1, 2);
+  const geo = new THREE.IcosahedronGeometry(1, 1);
   const pos = geo.attributes.position;
   const rand = seededRand(seed);
   const phaseA = rand() * 6.28;
@@ -183,10 +378,10 @@ function createDisplacedCliffGeometry(seed: number): THREE.BufferGeometry {
     const n =
       Math.sin(vx * 3.1 + phaseA) * Math.cos(vz * 2.9 + phaseB) * 0.24 +
       Math.sin((vx + vy) * 5.2 + phaseB) * 0.11;
-    const scaleXZ = 1.0 + n - Math.max(0, vy) * 0.25;
+    const scaleXZ = 1.0 + n - Math.max(0, vy) * 0.28;
     vx *= scaleXZ;
     vz *= scaleXZ;
-    vy = vy * 1.15 + Math.abs(n) * 0.35;
+    vy = vy * 1.18 + Math.abs(n) * 0.35;
     pos.setXYZ(i, vx, vy, vz);
   }
   geo.computeVertexNormals();
@@ -222,7 +417,7 @@ function createRampMesh(ramp: MapRamp, mat: THREE.Material): THREE.Mesh {
 
 /**
  * Generates a biome-matched PMREM environment cubemap from the arena's sky, sun & ground colors
- * so metallic weapons, armor, helmets, and ice reflect real sky & horizon light rather than flat grey.
+ * so metallic weapons, armor, helmets, and low-poly facets reflect authentic outdoor light.
  */
 export function setupSceneEnvironment(
   scene: THREE.Scene,
@@ -236,7 +431,6 @@ export function setupSceneEnvironment(
   const sunCol = map?.sunColor ?? '#ffd4a3';
   const groundCol = map?.hemiGroundColor ?? '#3b2e26';
 
-  // Upper sky & lower ground bounce sphere inside PMREM bake scene
   const domeGeo = new THREE.SphereGeometry(20, 24, 16);
   const domeMat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
@@ -262,11 +456,11 @@ export function setupSceneEnvironment(
       void main() {
         float y = vPos.y;
         vec3 col = y >= 0.0
-          ? mix(uHor * 1.15, uTop * 1.2, smoothstep(0.0, 0.75, y))
-          : mix(uHor * 0.7, uGround * 0.85, smoothstep(0.0, -0.6, y));
+          ? mix(uHor * 1.15, uTop * 1.25, smoothstep(0.0, 0.72, y))
+          : mix(uHor * 0.72, uGround * 0.85, smoothstep(0.0, -0.58, y));
         vec3 sunDir = normalize(vec3(0.65, 0.72, 0.38));
         float sunDot = max(dot(vPos, sunDir), 0.0);
-        col += uSun * pow(sunDot, 20.0) * 5.5;
+        col += uSun * pow(sunDot, 18.0) * 6.0;
         gl_FragColor = vec4(col, 1.0);
       }
     `,
@@ -277,7 +471,7 @@ export function setupSceneEnvironment(
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envTex = pmrem.fromScene(envScene, 0.035).texture;
   scene.environment = envTex;
-  scene.environmentIntensity = 1.15;
+  scene.environmentIntensity = 1.25;
 
   pmrem.dispose();
   domeGeo.dispose();
@@ -301,31 +495,35 @@ function addArchitecturalDetail(
   accentColor: string,
 ): void {
   if (b.y <= 0.05) {
-    const aoGeo = new THREE.PlaneGeometry(b.w + 2.6, b.d + 2.6);
+    const aoGeo = new THREE.PlaneGeometry(b.w + 2.8, b.d + 2.8);
     aoGeo.rotateX(-Math.PI / 2);
     const aoMesh = new THREE.Mesh(aoGeo, aoMat);
-    aoMesh.position.set(b.x, 0.015, b.z);
+    aoMesh.position.set(b.x, 0.014, b.z);
     root.add(aoMesh);
     disposables.push(aoGeo);
   }
 
   if (b.kind === 'core' || b.kind === 'tower') {
-    const plinthGeo = new THREE.BoxGeometry(b.w + 0.55, 0.38, b.d + 0.55);
+    // Low-poly beveled octagonal plinth
+    const plinthRadius = Math.max(b.w, b.d) * 0.72;
+    const plinthGeo = new THREE.CylinderGeometry(plinthRadius * 0.92, plinthRadius, 0.44, 8);
     const plinth = new THREE.Mesh(plinthGeo, darkMat);
-    plinth.position.set(b.x, b.y + 0.19, b.z);
+    plinth.position.set(b.x, b.y + 0.22, b.z);
+    plinth.rotation.y = Math.PI / 8;
     plinth.receiveShadow = true;
     root.add(plinth);
     disposables.push(plinthGeo);
   }
 
   if (b.kind === 'core') {
-    const collarGeo = new THREE.BoxGeometry(b.w + 0.16, 0.16, b.d + 0.16);
+    const collarGeo = new THREE.BoxGeometry(b.w + 0.22, 0.18, b.d + 0.22);
     const collar = new THREE.Mesh(collarGeo, trimMat);
-    collar.position.set(b.x, b.y + b.h - 0.14, b.z);
+    collar.position.set(b.x, b.y + b.h - 0.16, b.z);
     root.add(collar);
     disposables.push(collarGeo);
 
-    const buttressGeo = new THREE.BoxGeometry(0.45, b.h, 0.45);
+    // Tapered low-poly corner buttresses
+    const buttressGeo = new THREE.CylinderGeometry(0.24, 0.42, b.h, 6);
     const corners: Array<[number, number]> = [
       [-b.w * 0.5, -b.d * 0.5],
       [b.w * 0.5, -b.d * 0.5],
@@ -340,72 +538,456 @@ function addArchitecturalDetail(
     }
     disposables.push(buttressGeo);
 
-    const beacon = new THREE.PointLight(accentColor, 4.2, 22, 1.5);
-    beacon.position.set(b.x, b.y + b.h + 1.5, b.z);
+    const beacon = new THREE.PointLight(accentColor, 5.2, 26, 1.5);
+    beacon.position.set(b.x, b.y + b.h + 1.6, b.z);
     root.add(beacon);
+
+    // Decorative Fountain Water Pool for Estate Gardens
+    if (b.id === 'fountain-base') {
+      const waterGeo = new THREE.CylinderGeometry(b.w * 0.44, b.w * 0.44, 0.08, 16);
+      const waterMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        roughness: 0.12,
+        metalness: 0.55,
+        flatShading: true,
+      });
+      const waterMesh = new THREE.Mesh(waterGeo, waterMat);
+      waterMesh.position.set(b.x, b.y + b.h - 0.04, b.z);
+      root.add(waterMesh);
+      disposables.push(waterGeo, waterMat);
+    }
   } else if (b.kind === 'bridge') {
-    const capGeo = new THREE.BoxGeometry(b.w + 0.26, 0.22, b.d + 0.26);
+    const capGeo = new THREE.BoxGeometry(b.w + 0.3, 0.22, b.d + 0.3);
     const cap = new THREE.Mesh(capGeo, steelMat);
     cap.position.set(b.x, b.y + b.h - 0.11, b.z);
     cap.receiveShadow = true;
     root.add(cap);
     disposables.push(capGeo);
 
-    const collarGeo = new THREE.BoxGeometry(b.w + 0.3, 0.08, b.d + 0.3);
+    const collarGeo = new THREE.BoxGeometry(b.w + 0.34, 0.08, b.d + 0.34);
     const collar = new THREE.Mesh(collarGeo, trimMat);
-    collar.position.set(b.x, b.y + b.h - 0.24, b.z);
+    collar.position.set(b.x, b.y + b.h - 0.25, b.z);
     root.add(collar);
     disposables.push(collarGeo);
 
-    const pilGeo = new THREE.BoxGeometry(0.36, b.h + 0.95, 0.36);
-    const corners: Array<[number, number]> = [
-      [-b.w * 0.5 + 0.18, -b.d * 0.5 + 0.18],
-      [b.w * 0.5 - 0.18, -b.d * 0.5 + 0.18],
-      [-b.w * 0.5 + 0.18, b.d * 0.5 - 0.18],
-      [b.w * 0.5 - 0.18, b.d * 0.5 - 0.18],
-    ];
-    for (const [ox, oz] of corners) {
-      const p = new THREE.Mesh(pilGeo, darkMat);
-      p.position.set(b.x + ox, b.y + (b.h + 0.95) * 0.5, b.z + oz);
-      root.add(p);
+    // Classical Pavilion Gazebo Columns & Conical Dome Roof
+    if (b.id === 'gazebo-platform') {
+      const colGeo = new THREE.CylinderGeometry(0.24, 0.32, 4.4, 6);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const col = new THREE.Mesh(colGeo, steelMat);
+        col.position.set(b.x + Math.cos(a) * 5.8, b.y + b.h + 2.2, b.z + Math.sin(a) * 5.8);
+        col.castShadow = true;
+        root.add(col);
+      }
+      const roofGeo = new THREE.ConeGeometry(b.w * 0.58, 3.4, 8);
+      const roofMat = new THREE.MeshStandardMaterial({
+        color: 0x0f766e,
+        roughness: 0.65,
+        metalness: 0.22,
+        flatShading: true,
+      });
+      const roof = new THREE.Mesh(roofGeo, roofMat);
+      roof.position.set(b.x, b.y + b.h + 4.4 + 1.7, b.z);
+      roof.castShadow = true;
+      root.add(roof);
+      disposables.push(colGeo, roofGeo, roofMat);
+    } else {
+      // Low-poly corner stanchion posts with glowing tips
+      const pilGeo = new THREE.CylinderGeometry(0.18, 0.24, b.h + 0.9, 6);
+      const corners: Array<[number, number]> = [
+        [-b.w * 0.5 + 0.22, -b.d * 0.5 + 0.22],
+        [b.w * 0.5 - 0.22, -b.d * 0.5 + 0.22],
+        [-b.w * 0.5 + 0.22, b.d * 0.5 - 0.22],
+        [b.w * 0.5 - 0.22, b.d * 0.5 - 0.22],
+      ];
+      for (const [ox, oz] of corners) {
+        const p = new THREE.Mesh(pilGeo, darkMat);
+        p.position.set(b.x + ox, b.y + (b.h + 0.9) * 0.5, b.z + oz);
+        p.castShadow = true;
+        root.add(p);
+      }
+      disposables.push(pilGeo);
     }
-    disposables.push(pilGeo);
   } else if (b.kind === 'tower') {
-    const bandGeo = new THREE.BoxGeometry(b.w + 0.14, 0.28, b.d + 0.14);
+    // Hearth Fireplace Point Light for Safehouse Manor
+    if (b.id === 'chimney-stack') {
+      const hearth = new THREE.PointLight(0xf97316, 4.4, 16, 1.4);
+      hearth.position.set(b.x, b.y + 1.6, b.z + 2.4);
+      root.add(hearth);
+    }
+    const bandGeo = new THREE.BoxGeometry(b.w + 0.18, 0.28, b.d + 0.18);
     const band1 = new THREE.Mesh(bandGeo, darkMat);
-    band1.position.set(b.x, b.y + b.h * 0.55, b.z);
+    band1.position.set(b.x, b.y + b.h * 0.52, b.z);
     const band2 = new THREE.Mesh(bandGeo, trimMat);
-    band2.position.set(b.x, b.y + b.h - 0.32, b.z);
-    band2.scale.set(1.02, 0.48, 1.02);
+    band2.position.set(b.x, b.y + b.h - 0.3, b.z);
+    band2.scale.set(1.03, 0.45, 1.03);
 
-    const mastGeo = new THREE.CylinderGeometry(0.07, 0.14, 2.3, 10);
+    // Tapered low-poly roof pyramid cap
+    const roofGeo = new THREE.ConeGeometry(Math.max(b.w, b.d) * 0.72, 1.35, 4);
+    const roof = new THREE.Mesh(roofGeo, steelMat);
+    roof.rotation.y = Math.PI / 4;
+    roof.position.set(b.x, b.y + b.h + 0.67, b.z);
+    roof.castShadow = true;
+
+    const mastGeo = new THREE.CylinderGeometry(0.07, 0.13, 2.1, 6);
     const mast = new THREE.Mesh(mastGeo, steelMat);
-    mast.position.set(b.x + b.w * 0.22, b.y + b.h + 1.15, b.z - b.d * 0.22);
+    mast.position.set(b.x, b.y + b.h + 1.9, b.z);
 
-    // Animated tactical rotating radar array on central/corner towers
     const dishPivot = new THREE.Group();
-    dishPivot.position.set(b.x + b.w * 0.22, b.y + b.h + 2.25, b.z - b.d * 0.22);
-    const dishBarGeo = new THREE.BoxGeometry(1.5, 0.22, 0.14);
+    dishPivot.position.set(b.x, b.y + b.h + 2.85, b.z);
+    const dishBarGeo = new THREE.BoxGeometry(1.55, 0.24, 0.14);
     const dishBar = new THREE.Mesh(dishBarGeo, steelMat);
-    const dishTipGeo = new THREE.SphereGeometry(0.14, 8, 8);
+    const dishTipGeo = new THREE.OctahedronGeometry(0.18, 0);
     const dishTip = new THREE.Mesh(dishTipGeo, trimMat);
-    dishTip.position.y = 0.22;
+    dishTip.position.y = 0.26;
     dishPivot.add(dishBar, dishTip);
     radarDishes.push(dishPivot);
 
-    root.add(band1, band2, mast, dishPivot);
-    disposables.push(bandGeo, mastGeo, dishBarGeo, dishTipGeo);
+    root.add(band1, band2, roof, mast, dishPivot);
+    disposables.push(bandGeo, roofGeo, mastGeo, dishBarGeo, dishTipGeo);
   } else if (b.kind === 'cover') {
-    const shellGeo = new THREE.BoxGeometry(b.w + 0.05, b.h - 0.18, b.d + 0.05);
+    const shellGeo = new THREE.BoxGeometry(b.w + 0.06, b.h - 0.22, b.d + 0.06);
     const shell = new THREE.Mesh(shellGeo, containerMat);
     shell.position.set(b.x, b.y + b.h * 0.5, b.z);
     shell.castShadow = true;
     shell.receiveShadow = true;
-    const capGeo = new THREE.BoxGeometry(b.w + 0.14, 0.16, b.d + 0.14);
+    const capGeo = new THREE.BoxGeometry(b.w + 0.16, 0.18, b.d + 0.16);
     const cap = new THREE.Mesh(capGeo, darkMat);
-    cap.position.set(b.x, b.y + b.h - 0.08, b.z);
-    root.add(shell, cap);
-    disposables.push(shellGeo, capGeo);
+    cap.position.set(b.x, b.y + b.h - 0.09, b.z);
+    const stripeGeo = new THREE.BoxGeometry(b.w + 0.1, 0.08, b.d + 0.1);
+    const stripe = new THREE.Mesh(stripeGeo, trimMat);
+    stripe.position.set(b.x, b.y + 0.34, b.z);
+    root.add(shell, cap, stripe);
+    disposables.push(shellGeo, capGeo, stripeGeo);
+  }
+}
+
+function addBiomeLowPolyScenery(
+  map: ArenaMapSpec,
+  root: THREE.Group,
+  disposables: Array<{ dispose: () => void }>,
+  accentColor: string,
+): void {
+  const rand = seededRand(map.id.length * 409 + 17);
+  const dummy = new THREE.Object3D();
+
+  if (map.id === 'borealis-citadel') {
+    // Low-poly snow-dusted pine trees outside perimeter
+    const count = 34;
+    const trunkGeo = new THREE.CylinderGeometry(0.28, 0.45, 2.6, 6);
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0x4a3525,
+      roughness: 0.9,
+      flatShading: true,
+    });
+    const foliageGeo = new THREE.ConeGeometry(2.1, 4.6, 6);
+    const foliageMat = new THREE.MeshStandardMaterial({
+      color: 0x1e4d45,
+      roughness: 0.84,
+      flatShading: true,
+    });
+    const snowCapGeo = new THREE.ConeGeometry(1.45, 2.2, 6);
+    const snowMat = new THREE.MeshStandardMaterial({
+      color: 0xe2e8f0,
+      roughness: 0.55,
+      flatShading: true,
+    });
+
+    const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, count);
+    const leaves = new THREE.InstancedMesh(foliageGeo, foliageMat, count);
+    const snows = new THREE.InstancedMesh(snowCapGeo, snowMat, count);
+    const tint = new THREE.Color();
+
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (rand() - 0.5) * 0.14;
+      const dist = map.halfExtent + 9 + rand() * 24;
+      const px = Math.cos(angle) * dist;
+      const pz = Math.sin(angle) * dist;
+      const s = 0.85 + rand() * 0.7;
+
+      dummy.position.set(px, 1.2 * s, pz);
+      dummy.rotation.set(0, rand() * Math.PI, 0);
+      dummy.scale.setScalar(s);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(i, dummy.matrix);
+
+      dummy.position.set(px, 4.1 * s, pz);
+      dummy.updateMatrix();
+      leaves.setMatrixAt(i, dummy.matrix);
+      tint.setHex(0x1f554c).offsetHSL((rand() - 0.5) * 0.04, 0, (rand() - 0.5) * 0.08);
+      leaves.setColorAt(i, tint);
+
+      dummy.position.set(px, 5.7 * s, pz);
+      dummy.updateMatrix();
+      snows.setMatrixAt(i, dummy.matrix);
+    }
+    trunks.computeBoundingSphere();
+    leaves.computeBoundingSphere();
+    snows.computeBoundingSphere();
+    root.add(trunks, leaves, snows);
+    disposables.push(trunkGeo, trunkMat, foliageGeo, foliageMat, snowCapGeo, snowMat);
+  } else if (map.id === 'helios-outpost') {
+    // Low-poly stepped canyon rock spires & desert boulders
+    const count = 28;
+    const mesaGeo = new THREE.CylinderGeometry(1.8, 3.6, 7.5, 6);
+    const mesaMat = new THREE.MeshStandardMaterial({
+      color: 0xb9683a,
+      roughness: 0.9,
+      flatShading: true,
+    });
+    const mesas = new THREE.InstancedMesh(mesaGeo, mesaMat, count);
+    const tint = new THREE.Color();
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (rand() - 0.5) * 0.18;
+      const dist = map.halfExtent + 10 + rand() * 26;
+      const sx = 0.9 + rand() * 1.4;
+      const sy = 0.7 + rand() * 1.8;
+      dummy.position.set(Math.cos(angle) * dist, 3.2 * sy, Math.sin(angle) * dist);
+      dummy.rotation.set(0, rand() * Math.PI, 0);
+      dummy.scale.set(sx, sy, sx * (0.8 + rand() * 0.4));
+      dummy.updateMatrix();
+      mesas.setMatrixAt(i, dummy.matrix);
+      tint.setHex(0xb9683a).offsetHSL(0, 0, (rand() - 0.5) * 0.12);
+      mesas.setColorAt(i, tint);
+    }
+    mesas.computeBoundingSphere();
+    root.add(mesas);
+    disposables.push(mesaGeo, mesaMat);
+  } else if (map.id === 'estate-garden') {
+    // Low-poly Italian Cypress trees + blooming flowering hydrangea / rose bushes
+    const treeCount = 30;
+    const trunkGeo = new THREE.CylinderGeometry(0.2, 0.32, 2.2, 6);
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0x5c4033,
+      roughness: 0.9,
+      flatShading: true,
+    });
+    const cypressGeo = new THREE.ConeGeometry(1.35, 6.2, 6);
+    const cypressMat = new THREE.MeshStandardMaterial({
+      color: 0x14532d,
+      roughness: 0.82,
+      flatShading: true,
+    });
+    const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, treeCount);
+    const foliage = new THREE.InstancedMesh(cypressGeo, cypressMat, treeCount);
+    const tint = new THREE.Color();
+    for (let i = 0; i < treeCount; i++) {
+      const angle = (i / treeCount) * Math.PI * 2 + (rand() - 0.5) * 0.16;
+      const dist = map.halfExtent + 8 + rand() * 22;
+      const s = 0.85 + rand() * 0.65;
+      dummy.position.set(Math.cos(angle) * dist, 1.1 * s, Math.sin(angle) * dist);
+      dummy.rotation.set(0, rand() * Math.PI, 0);
+      dummy.scale.setScalar(s);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(i, dummy.matrix);
+
+      dummy.position.set(Math.cos(angle) * dist, 4.2 * s, Math.sin(angle) * dist);
+      dummy.updateMatrix();
+      foliage.setMatrixAt(i, dummy.matrix);
+      tint.setHex(0x14532d).offsetHSL((rand() - 0.5) * 0.05, 0, (rand() - 0.5) * 0.08);
+      foliage.setColorAt(i, tint);
+    }
+    trunks.computeBoundingSphere();
+    foliage.computeBoundingSphere();
+    root.add(trunks, foliage);
+    disposables.push(trunkGeo, trunkMat, cypressGeo, cypressMat);
+
+    // Blooming floral shrubs along outer lawn
+    const bushCount = 36;
+    const bushGeo = new THREE.DodecahedronGeometry(0.95, 0);
+    const bushMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.85,
+      flatShading: true,
+    });
+    const bushes = new THREE.InstancedMesh(bushGeo, bushMat, bushCount);
+    const bushColors = [0xdb2777, 0xf43f5e, 0xf59e0b, 0x10b981, 0x38bdf8, 0xf8fafc];
+    for (let i = 0; i < bushCount; i++) {
+      const angle = (i / bushCount) * Math.PI * 2;
+      const dist = map.halfExtent + 4 + rand() * 12;
+      const bs = 0.75 + rand() * 0.65;
+      dummy.position.set(Math.cos(angle) * dist, 0.75 * bs, Math.sin(angle) * dist);
+      dummy.rotation.set(rand() * Math.PI, rand() * Math.PI, 0);
+      dummy.scale.set(bs * (0.9 + rand() * 0.3), bs, bs * (0.9 + rand() * 0.3));
+      dummy.updateMatrix();
+      bushes.setMatrixAt(i, dummy.matrix);
+      bushes.setColorAt(i, tint.setHex(bushColors[i % bushColors.length]));
+    }
+    bushes.computeBoundingSphere();
+    root.add(bushes);
+    disposables.push(bushGeo, bushMat);
+  } else if (map.id === 'safehouse-manor') {
+    // Scandinavian mountain spruce pines + low-poly A-frame cabins in distant hills
+    const count = 32;
+    const trunkGeo = new THREE.CylinderGeometry(0.3, 0.45, 2.5, 6);
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0x451a03,
+      roughness: 0.9,
+      flatShading: true,
+    });
+    const spruceGeo = new THREE.ConeGeometry(2.3, 4.4, 6);
+    const spruceMat = new THREE.MeshStandardMaterial({
+      color: 0x1e3a2f,
+      roughness: 0.85,
+      flatShading: true,
+    });
+    const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, count);
+    const spruces = new THREE.InstancedMesh(spruceGeo, spruceMat, count);
+    const tint = new THREE.Color();
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (rand() - 0.5) * 0.15;
+      const dist = map.halfExtent + 8 + rand() * 24;
+      const s = 0.9 + rand() * 0.7;
+      dummy.position.set(Math.cos(angle) * dist, 1.2 * s, Math.sin(angle) * dist);
+      dummy.rotation.set(0, rand() * Math.PI, 0);
+      dummy.scale.setScalar(s);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(i, dummy.matrix);
+
+      dummy.position.set(Math.cos(angle) * dist, 3.8 * s, Math.sin(angle) * dist);
+      dummy.updateMatrix();
+      spruces.setMatrixAt(i, dummy.matrix);
+      tint.setHex(0x1e3a2f).offsetHSL(0, 0, (rand() - 0.5) * 0.1);
+      spruces.setColorAt(i, tint);
+    }
+    trunks.computeBoundingSphere();
+    spruces.computeBoundingSphere();
+    root.add(trunks, spruces);
+    disposables.push(trunkGeo, trunkMat, spruceGeo, spruceMat);
+
+    // Distant low-poly A-frame cabins
+    const cabinCount = 10;
+    const cabinGeo = new THREE.BoxGeometry(4.2, 2.8, 5.2);
+    const cabinMat = new THREE.MeshStandardMaterial({
+      color: 0x78350f,
+      roughness: 0.8,
+      flatShading: true,
+    });
+    const cabins = new THREE.InstancedMesh(cabinGeo, cabinMat, cabinCount);
+    for (let i = 0; i < cabinCount; i++) {
+      const angle = (i / cabinCount) * Math.PI * 2 + 0.3;
+      const dist = map.halfExtent + 28 + (i % 3) * 12;
+      dummy.position.set(Math.cos(angle) * dist, 3.5 + (i % 4) * 2, Math.sin(angle) * dist);
+      dummy.rotation.set(0, angle + Math.PI / 2, 0);
+      dummy.scale.setScalar(1.2 + rand() * 0.5);
+      dummy.updateMatrix();
+      cabins.setMatrixAt(i, dummy.matrix);
+    }
+    cabins.computeBoundingSphere();
+    root.add(cabins);
+    disposables.push(cabinGeo, cabinMat);
+  } else if (map.id === 'neon-rooftop') {
+    // Low-poly futuristic skyscraper towers in surrounding cityscape
+    const towerCount = 32;
+    const towerGeo = new THREE.BoxGeometry(12, 60, 12);
+    const towerMat = new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      roughness: 0.85,
+      metalness: 0.35,
+      flatShading: true,
+    });
+    const antennaGeo = new THREE.CylinderGeometry(0.15, 0.3, 14, 4);
+    const antennaMat = new THREE.MeshStandardMaterial({
+      color: 0x06b6d4,
+      emissive: 0x06b6d4,
+      emissiveIntensity: 2.2,
+      roughness: 0.2,
+      metalness: 0.5,
+      flatShading: true,
+    });
+    const towers = new THREE.InstancedMesh(towerGeo, towerMat, towerCount);
+    const antennas = new THREE.InstancedMesh(antennaGeo, antennaMat, towerCount);
+    const tint = new THREE.Color();
+    for (let i = 0; i < towerCount; i++) {
+      const angle = (i / towerCount) * Math.PI * 2 + (rand() - 0.5) * 0.12;
+      const dist = map.halfExtent + 18 + (i % 4) * 16;
+      const sy = 0.55 + rand() * 1.1;
+      const h = 60 * sy;
+      dummy.position.set(Math.cos(angle) * dist, h * 0.5 - 28, Math.sin(angle) * dist);
+      dummy.rotation.set(0, i * 0.45, 0);
+      dummy.scale.set(1.1 + rand() * 0.7, sy, 1.1 + rand() * 0.7);
+      dummy.updateMatrix();
+      towers.setMatrixAt(i, dummy.matrix);
+
+      dummy.position.set(Math.cos(angle) * dist, h - 28 + 7, Math.sin(angle) * dist);
+      dummy.updateMatrix();
+      antennas.setMatrixAt(i, dummy.matrix);
+
+      tint.setHex(0x0f172a).offsetHSL(0, 0, (rand() - 0.5) * 0.08);
+      towers.setColorAt(i, tint);
+    }
+    towers.computeBoundingSphere();
+    antennas.computeBoundingSphere();
+    root.add(towers, antennas);
+    disposables.push(towerGeo, towerMat, antennaGeo, antennaMat);
+  } else if (map.id === 'oasis-temple') {
+    // Low-poly oasis palm trees & ancient stone colonnades
+    const count = 28;
+    const trunkGeo = new THREE.CylinderGeometry(0.24, 0.44, 7.0, 5);
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0x78350f,
+      roughness: 0.9,
+      flatShading: true,
+    });
+    const canopyGeo = new THREE.ConeGeometry(2.6, 2.2, 6);
+    const canopyMat = new THREE.MeshStandardMaterial({
+      color: 0x15803d,
+      roughness: 0.75,
+      flatShading: true,
+    });
+    const palms = new THREE.InstancedMesh(trunkGeo, trunkMat, count);
+    const canopies = new THREE.InstancedMesh(canopyGeo, canopyMat, count);
+    const tint = new THREE.Color();
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (rand() - 0.5) * 0.15;
+      const dist = map.halfExtent + 8 + rand() * 24;
+      const s = 0.85 + rand() * 0.6;
+      dummy.position.set(Math.cos(angle) * dist, 3.5 * s, Math.sin(angle) * dist);
+      dummy.rotation.set((rand() - 0.5) * 0.16, rand() * Math.PI, (rand() - 0.5) * 0.16);
+      dummy.scale.set(s, s, s);
+      dummy.updateMatrix();
+      palms.setMatrixAt(i, dummy.matrix);
+
+      dummy.position.set(Math.cos(angle) * dist, 7.0 * s, Math.sin(angle) * dist);
+      dummy.rotation.set(0, rand() * Math.PI, 0);
+      dummy.scale.set(s * 1.3, s * 0.95, s * 1.3);
+      dummy.updateMatrix();
+      canopies.setMatrixAt(i, dummy.matrix);
+
+      tint.setHex(0x15803d).offsetHSL((rand() - 0.5) * 0.06, 0, (rand() - 0.5) * 0.1);
+      canopies.setColorAt(i, tint);
+    }
+    palms.computeBoundingSphere();
+    canopies.computeBoundingSphere();
+    root.add(palms, canopies);
+    disposables.push(trunkGeo, trunkMat, canopyGeo, canopyMat);
+  } else {
+    // Low-poly volcanic slag crystal clusters around Obsidian Foundry
+    const count = 26;
+    const shardGeo = new THREE.OctahedronGeometry(1.4, 0);
+    const shardMat = new THREE.MeshStandardMaterial({
+      color: accentColor,
+      emissive: accentColor,
+      emissiveIntensity: 0.55,
+      roughness: 0.35,
+      metalness: 0.4,
+      flatShading: true,
+    });
+    const shards = new THREE.InstancedMesh(shardGeo, shardMat, count);
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2;
+      const dist = map.halfExtent + 8 + rand() * 18;
+      const sy = 1.1 + rand() * 1.9;
+      dummy.position.set(Math.cos(angle) * dist, sy * 0.85, Math.sin(angle) * dist);
+      dummy.rotation.set((rand() - 0.5) * 0.4, rand() * Math.PI, (rand() - 0.5) * 0.4);
+      dummy.scale.set(0.8 + rand() * 0.5, sy, 0.8 + rand() * 0.5);
+      dummy.updateMatrix();
+      shards.setMatrixAt(i, dummy.matrix);
+    }
+    shards.computeBoundingSphere();
+    root.add(shards);
+    disposables.push(shardGeo, shardMat);
   }
 }
 
@@ -426,128 +1008,169 @@ export function buildArenaMapScene(
   scene.background = new THREE.Color(map.fogColor);
   scene.fog = new THREE.FogExp2(map.fogColor, map.fogDensity);
 
-  const sunPosition = new THREE.Vector3(44, 52, 26);
+  const sunPosition = new THREE.Vector3(48, 56, 30);
 
-  // Atmospheric Sky Dome with Sun Disc + Cloud Wisps
+  // Atmospheric Sky Dome with Sun Disc & Rayleigh/Mie scattering
   const skyDome = createSkyDome(map.skyTopColor, map.skyHorizonColor, map.sunColor, sunPosition);
   root.add(skyDome);
   disposables.push(skyDome.geometry, skyDome.material as THREE.Material);
 
-  // Three-Point Outdoor Lighting Rig (Warm Sun + Cool Sky Hemisphere + Rim)
-  const hemi = new THREE.HemisphereLight(map.hemiSkyColor, map.hemiGroundColor, 1.05);
+  // Stylized Low-Poly Floating Sky Clouds (InstancedMesh)
+  const cloudCount = 36;
+  const cloudGeo = new THREE.IcosahedronGeometry(1, 0);
+  const cloudMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.95,
+    metalness: 0.0,
+    flatShading: true,
+    transparent: true,
+    opacity: 0.88,
+  });
+  const cloudInst = new THREE.InstancedMesh(cloudGeo, cloudMat, cloudCount);
+  const cloudDummy = new THREE.Object3D();
+  const cloudRand = seededRand(503);
+  for (let i = 0; i < cloudCount; i++) {
+    const clusterAngle = (Math.floor(i / 3) / 12) * Math.PI * 2 + (cloudRand() - 0.5) * 0.2;
+    const clusterDist = 85 + (i % 4) * 28;
+    cloudDummy.position.set(
+      Math.cos(clusterAngle) * clusterDist + (cloudRand() - 0.5) * 14,
+      54 + cloudRand() * 18,
+      Math.sin(clusterAngle) * clusterDist + (cloudRand() - 0.5) * 14,
+    );
+    const sx = 6 + cloudRand() * 9;
+    const sy = 2.4 + cloudRand() * 2.5;
+    cloudDummy.scale.set(sx, sy, sx * (0.7 + cloudRand() * 0.4));
+    cloudDummy.rotation.set(0, cloudRand() * Math.PI, 0);
+    cloudDummy.updateMatrix();
+    cloudInst.setMatrixAt(i, cloudDummy.matrix);
+  }
+  cloudInst.computeBoundingSphere();
+  root.add(cloudInst);
+  disposables.push(cloudGeo, cloudMat);
+
+  // Realistic Three-Point Outdoor Lighting Rig (Warm Sun Key + Cool Sky Hemisphere + Rim)
+  const hemi = new THREE.HemisphereLight(map.hemiSkyColor, map.hemiGroundColor, 1.25);
   root.add(hemi);
 
-  const keyLight = new THREE.DirectionalLight(map.sunColor, map.sunIntensity);
+  const keyLight = new THREE.DirectionalLight(map.sunColor, map.sunIntensity * 1.08);
   keyLight.position.copy(sunPosition);
   keyLight.castShadow = !isSoftwareGl;
-  keyLight.shadow.mapSize.width = 1024;
-  keyLight.shadow.mapSize.height = 1024;
-  const d = map.halfExtent + 10;
+  keyLight.shadow.mapSize.width = 2048;
+  keyLight.shadow.mapSize.height = 2048;
+  const d = map.halfExtent + 12;
   keyLight.shadow.camera.left = -d;
   keyLight.shadow.camera.right = d;
   keyLight.shadow.camera.top = d;
   keyLight.shadow.camera.bottom = -d;
-  keyLight.shadow.camera.near = 5;
-  keyLight.shadow.camera.far = 160;
-  keyLight.shadow.bias = -0.0005;
-  keyLight.shadow.normalBias = 0.025;
+  keyLight.shadow.camera.near = 6;
+  keyLight.shadow.camera.far = 175;
+  keyLight.shadow.bias = -0.0004;
+  keyLight.shadow.normalBias = 0.022;
+  keyLight.shadow.radius = 2.4;
   root.add(keyLight);
 
-  const rimLight = new THREE.DirectionalLight(map.accentColor, 0.72);
-  rimLight.position.set(-38, 24, -34);
+  const rimLight = new THREE.DirectionalLight(map.hemiSkyColor, 0.85);
+  rimLight.position.set(-42, 26, -38);
   root.add(rimLight);
 
-  // Real 1K PBR Web Textures (Albedo + NormalGL + Roughness)
-  const groundFolder =
-    map.id === 'helios-outpost'
-      ? 'canyon_sand'
-      : map.id === 'borealis-citadel'
-        ? 'arctic_ice'
-        : 'foundry_floor';
-
-  const groundRepeat =
-    map.id === 'helios-outpost' ? 78 : map.id === 'borealis-citadel' ? 72 : 115;
-  const groundPbr = getOrLoadPbrMaps(groundFolder, groundRepeat, groundRepeat, renderer);
-  const metalPbr = getOrLoadPbrMaps('metal_panel', 2, 1, renderer);
-  const metalDetailPbr = getOrLoadPbrMaps('metal_panel', 3, 2, renderer);
-
+  // Playable Arena Low-Poly Architectural Floor + Sculpted Faceted Valley Surround
+  const floorMaps = createLowPolyFloorMaps(map, renderer);
+  const armorBump = createLowPolyArmorBump(renderer);
   const aoTex = createContactAoTexture();
   const moteTex = createSoftParticleTexture();
-  disposables.push(aoTex, moteTex);
+  disposables.push(floorMaps.map, floorMaps.roughnessMap, armorBump, aoTex, moteTex);
 
   const aoMat = new THREE.MeshBasicMaterial({
     map: aoTex,
     transparent: true,
     depthWrite: false,
-    opacity: 0.78,
+    opacity: 0.72,
   });
   disposables.push(aoMat);
 
-  // Extended terrain beyond playable bounds with real PBR normal + roughness maps
-  const terrainGeo = new THREE.PlaneGeometry(420, 420);
-  terrainGeo.rotateX(-Math.PI / 2);
-  const terrainMat = new THREE.MeshStandardMaterial({
-    map: groundPbr.map,
-    normalMap: groundPbr.normalMap,
-    normalScale: new THREE.Vector2(1.15, 1.15),
-    roughnessMap: groundPbr.roughnessMap,
+  const floorSize = (map.halfExtent + 3.5) * 2;
+  const floorGeo = new THREE.PlaneGeometry(floorSize, floorSize);
+  floorGeo.rotateX(-Math.PI / 2);
+  const floorMat = new THREE.MeshStandardMaterial({
+    map: floorMaps.map,
+    roughnessMap: floorMaps.roughnessMap,
     color: 0xffffff,
-    roughness: map.id === 'borealis-citadel' ? 0.55 : 0.9,
-    metalness: map.id === 'obsidian-foundry' ? 0.22 : 0.08,
+    roughness: map.id === 'borealis-citadel' ? 0.52 : 0.86,
+    metalness: map.id === 'obsidian-foundry' ? 0.16 : 0.05,
   });
-  const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
-  terrainMesh.position.y = 0;
-  terrainMesh.receiveShadow = true;
-  root.add(terrainMesh);
-  collidableMeshes.push(terrainMesh);
-  disposables.push(terrainGeo, terrainMat);
+  const floorMesh = new THREE.Mesh(floorGeo, floorMat);
+  floorMesh.position.y = 0;
+  floorMesh.receiveShadow = true;
+  root.add(floorMesh);
+  collidableMeshes.push(floorMesh);
+  disposables.push(floorGeo, floorMat);
 
-  // Center tactical arena court ring & outer perimeter track on floor
-  const courtRingGeo = new THREE.RingGeometry(11.6, 12.15, 56);
+  // Outer sculpted low-poly basin terrain (faceted vertex-colored hills/dunes/glaciers)
+  const outerTerrainGeo = createLowPolyOuterTerrain(map);
+  const outerTerrainMat = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.9,
+    metalness: 0.05,
+    flatShading: true,
+  });
+  const outerTerrainMesh = new THREE.Mesh(outerTerrainGeo, outerTerrainMat);
+  outerTerrainMesh.receiveShadow = true;
+  root.add(outerTerrainMesh);
+  disposables.push(outerTerrainGeo, outerTerrainMat);
+
+  // Center tactical arena court ring & inner octagon line
+  const courtRingGeo = new THREE.RingGeometry(11.65, 12.1, 8);
   courtRingGeo.rotateX(-Math.PI / 2);
   const courtRingMat = new THREE.MeshBasicMaterial({
     color: map.accentColor,
     transparent: true,
-    opacity: 0.44,
+    opacity: 0.48,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
   });
   const courtRing = new THREE.Mesh(courtRingGeo, courtRingMat);
-  courtRing.position.y = 0.022;
+  courtRing.position.y = 0.02;
+  courtRing.rotation.y = Math.PI / 8;
   root.add(courtRing);
   disposables.push(courtRingGeo, courtRingMat);
 
-  // Shared Architectural PBR Materials using real metal normal/roughness maps
+  // Low-Poly Stylized PBR Materials (strong matte-vs-metallic roughness separation + flatShading)
   const steelMat = new THREE.MeshStandardMaterial({
     color: 0x475569,
-    normalMap: metalDetailPbr.normalMap,
-    roughnessMap: metalDetailPbr.roughnessMap,
-    roughness: 0.55,
-    metalness: 0.72,
+    bumpMap: armorBump,
+    bumpScale: 0.015,
+    roughness: 0.34,
+    metalness: 0.78,
+    flatShading: true,
   });
   const darkMat = new THREE.MeshStandardMaterial({
-    color: 0x18181b,
-    roughness: 0.6,
-    metalness: 0.5,
+    color: 0x181c24,
+    roughness: 0.72,
+    metalness: 0.25,
+    flatShading: true,
   });
   const trimMat = new THREE.MeshStandardMaterial({
     color: map.accentColor,
     emissive: map.accentColor,
-    emissiveIntensity: 1.35,
-    roughness: 0.22,
+    emissiveIntensity: 1.5,
+    roughness: 0.2,
     metalness: 0.45,
+    flatShading: true,
   });
   const containerMat = new THREE.MeshStandardMaterial({
-    map: metalPbr.map,
-    normalMap: metalPbr.normalMap,
-    roughnessMap: metalPbr.roughnessMap,
-    color: map.id === 'helios-outpost' ? '#b46b3e' : map.id === 'borealis-citadel' ? '#0ea5e9' : '#94a3b8',
-    roughness: 0.68,
-    metalness: 0.42,
+    color: map.id === 'helios-outpost' ? '#b8683c' : map.id === 'borealis-citadel' ? '#0284c7' : '#64748b',
+    bumpMap: armorBump,
+    bumpScale: 0.02,
+    roughness: 0.74,
+    metalness: 0.18,
+    flatShading: true,
   });
   disposables.push(steelMat, darkMat, trimMat, containerMat);
 
   // Perimeter Jersey Barrier Curbs with Illuminated Trim
   const borderSize = map.halfExtent * 2;
-  const curbHeight = 1.25;
+  const curbHeight = 1.2;
   const curbThickness = 1.1;
   const ext = map.halfExtent + curbThickness * 0.5;
   const curbs: Array<[number, number, number, number]> = [
@@ -577,14 +1200,21 @@ export function buildArenaMapScene(
     disposables.push(tg);
   }
 
-  // Organic Displaced Cliff / Mountain Ridge Ring
+  // Faceted Low-Poly Perimeter Cliffs & Mountain Silhouettes
   const cliffColor =
-    map.id === 'helios-outpost' ? 0x9f5630 : map.id === 'borealis-citadel' ? 0x475569 : 0x2f3747;
+    map.id === 'helios-outpost'
+      ? 0xa35832
+      : map.id === 'borealis-citadel'
+        ? 0x52657d
+        : map.id === 'estate-garden'
+          ? 0x2e5a36
+          : map.id === 'safehouse-manor'
+            ? 0x3d352e
+            : 0x2c3340;
   const cliffMat = new THREE.MeshStandardMaterial({
     color: cliffColor,
-    normalMap: groundPbr.normalMap,
     roughness: 0.92,
-    metalness: 0.06,
+    metalness: 0.05,
     flatShading: true,
   });
   disposables.push(cliffMat);
@@ -604,42 +1234,44 @@ export function buildArenaMapScene(
     for (let i = 0; i < count; i++) {
       const idx = i * 3 + gIdx;
       const angle = (idx / 48) * Math.PI * 2;
-      const dist = map.halfExtent + 24 + (idx % 4) * 14;
-      const sx = 9 + ((idx * 7) % 8);
-      const sy = 7 + ((idx * 11) % 13);
-      const sz = 9 + ((idx * 5) % 8);
-      dummy.position.set(Math.cos(angle) * dist, sy * 0.38, Math.sin(angle) * dist);
+      const dist = map.halfExtent + 28 + (idx % 4) * 14;
+      const sx = 10 + ((idx * 7) % 8);
+      const sy = 8 + ((idx * 11) % 13);
+      const sz = 10 + ((idx * 5) % 8);
+      dummy.position.set(Math.cos(angle) * dist, sy * 0.42, Math.sin(angle) * dist);
       dummy.rotation.set(0, angle * 1.3 + gIdx, 0);
       dummy.scale.set(sx, sy, sz);
       dummy.updateMatrix();
       inst.setMatrixAt(i, dummy.matrix);
-      cColor.set(cliffColor).offsetHSL(0, 0, ((idx % 5) - 2) * 0.035);
+      cColor.set(cliffColor).offsetHSL(0, 0, ((idx % 5) - 2) * 0.04);
       inst.setColorAt(i, cColor);
     }
     inst.computeBoundingSphere();
     root.add(inst);
   }
 
-  // Structural Map Boxes + Rich Architectural Dressing
+  addBiomeLowPolyScenery(map, root, disposables, map.accentColor);
+
+  // Structural Map Boxes + Low-Poly Architectural Dressing
   const defaultBoxMat = new THREE.MeshStandardMaterial({
-    map: metalDetailPbr.map,
-    normalMap: metalDetailPbr.normalMap,
-    roughnessMap: metalDetailPbr.roughnessMap,
+    bumpMap: armorBump,
+    bumpScale: 0.015,
     color: map.structureTint,
-    roughness: 0.65,
-    metalness: 0.38,
+    roughness: 0.72,
+    metalness: 0.24,
+    flatShading: true,
   });
   disposables.push(defaultBoxMat);
 
   for (const b of map.boxes) {
     const mat = b.color
       ? new THREE.MeshStandardMaterial({
-          map: metalDetailPbr.map,
-          normalMap: metalDetailPbr.normalMap,
-          roughnessMap: metalDetailPbr.roughnessMap,
+          bumpMap: armorBump,
+          bumpScale: 0.015,
           color: b.color,
-          roughness: b.kind === 'tower' ? 0.55 : 0.72,
-          metalness: b.kind === 'tower' ? 0.45 : 0.25,
+          roughness: b.kind === 'tower' ? 0.52 : 0.78,
+          metalness: b.kind === 'tower' ? 0.42 : 0.16,
+          flatShading: true,
         })
       : defaultBoxMat;
     if (b.color) disposables.push(mat);
@@ -667,14 +1299,14 @@ export function buildArenaMapScene(
     );
   }
 
-  // Ramps with Tread Surface
+  // Faceted Ramps with Low-Poly Side Trim
   const rampMat = new THREE.MeshStandardMaterial({
-    map: metalDetailPbr.map,
-    normalMap: metalDetailPbr.normalMap,
-    roughnessMap: metalDetailPbr.roughnessMap,
+    bumpMap: armorBump,
+    bumpScale: 0.014,
     color: map.structureTint,
-    roughness: 0.58,
-    metalness: 0.44,
+    roughness: 0.62,
+    metalness: 0.34,
+    flatShading: true,
   });
   disposables.push(rampMat);
   for (const r of map.ramps) {
@@ -684,16 +1316,17 @@ export function buildArenaMapScene(
     disposables.push(rampMesh.geometry);
   }
 
-  // Jump Pads (3-part composite grounded emitter + glowing torus)
-  const padBaseGeo = new THREE.CylinderGeometry(1.55, 1.85, 0.24, 24);
-  const padRingGeo = new THREE.TorusGeometry(1.18, 0.11, 10, 28);
-  const padCoreGeo = new THREE.CylinderGeometry(0.95, 0.95, 0.08, 24);
+  // Jump Pads (Low-Poly Hexagonal Emitter + Glowing Torus)
+  const padBaseGeo = new THREE.CylinderGeometry(1.55, 1.88, 0.26, 8);
+  const padRingGeo = new THREE.TorusGeometry(1.18, 0.11, 6, 16);
+  const padCoreGeo = new THREE.CylinderGeometry(0.95, 0.95, 0.08, 8);
   const padGlowMat = new THREE.MeshStandardMaterial({
     color: 0x06b6d4,
     emissive: 0x06b6d4,
     emissiveIntensity: 1.9,
     roughness: 0.18,
     metalness: 0.5,
+    flatShading: true,
   });
   disposables.push(padBaseGeo, padRingGeo, padCoreGeo, padGlowMat);
 
@@ -702,11 +1335,11 @@ export function buildArenaMapScene(
     padGroup.position.set(pad.x, pad.y, pad.z);
 
     const base = new THREE.Mesh(padBaseGeo, darkMat);
-    base.position.y = 0.12;
+    base.position.y = 0.13;
     base.receiveShadow = true;
 
     const core = new THREE.Mesh(padCoreGeo, padGlowMat);
-    core.position.y = 0.25;
+    core.position.y = 0.27;
 
     const ring = new THREE.Mesh(padRingGeo, padGlowMat);
     ring.rotation.x = Math.PI / 2;
@@ -717,18 +1350,18 @@ export function buildArenaMapScene(
     root.add(padGroup);
   }
 
-  // Dynamic Rigid-Body Crates & Explosive Barrels (Real Poly Haven GLTF meshes when loaded)
+  // Dynamic Rigid-Body Crates & Explosive Barrels
   const fallbackCrateMat = new THREE.MeshStandardMaterial({
-    map: metalPbr.map,
-    normalMap: metalPbr.normalMap,
     color: 0x94a3b8,
-    roughness: 0.5,
-    metalness: 0.45,
+    roughness: 0.55,
+    metalness: 0.35,
+    flatShading: true,
   });
   const fallbackBarrelMat = new THREE.MeshStandardMaterial({
     color: 0xc2410c,
-    roughness: 0.42,
-    metalness: 0.58,
+    roughness: 0.45,
+    metalness: 0.52,
+    flatShading: true,
   });
   disposables.push(fallbackCrateMat, fallbackBarrelMat);
 
@@ -750,7 +1383,7 @@ export function buildArenaMapScene(
     } else {
       const geo =
         kind === 'barrel'
-          ? new THREE.CylinderGeometry(c.size * 0.36, c.size * 0.36, c.size * 1.15, 16)
+          ? new THREE.CylinderGeometry(c.size * 0.36, c.size * 0.36, c.size * 1.15, 8)
           : new THREE.BoxGeometry(c.size, c.size, c.size);
       const mesh = new THREE.Mesh(geo, kind === 'barrel' ? fallbackBarrelMat : fallbackCrateMat);
       mesh.position.set(c.x, c.y, c.z);
@@ -764,7 +1397,7 @@ export function buildArenaMapScene(
     }
   }
 
-  // Web-sourced Poly Haven + Khronos GLTF Environment Props with Auto-Grounding & Contact AO
+  // Web-sourced GLTF Environment Props with Auto-Grounding & Contact AO
   for (const prop of map.glbProps) {
     const asset = assetRegistry.getCached(prop.model);
     if (asset) {
@@ -772,7 +1405,6 @@ export function buildArenaMapScene(
       const clone = asset.scene.clone(true);
       clone.scale.setScalar(prop.scale);
 
-      // Measure bounding box so bottom sits flush on prop.y
       clone.updateMatrixWorld(true);
       const bbox = new THREE.Box3().setFromObject(clone);
       if (prop.model !== 'helmet') {
@@ -795,9 +1427,38 @@ export function buildArenaMapScene(
 
       if (prop.model === 'helmet') {
         relicGroup = wrapper;
-      } else if (prop.model === 'barrier' || prop.model === 'container' || prop.model === 'rock') {
-        const aoSize = prop.model === 'rock' ? 4.2 : 3.2;
-        const aoGeo = new THREE.PlaneGeometry(aoSize, aoSize * 0.65);
+      } else if (
+        prop.model === 'barrier' ||
+        prop.model === 'container' ||
+        prop.model === 'rock' ||
+        prop.model === 'bench' ||
+        prop.model === 'picnic_table' ||
+        prop.model === 'planter' ||
+        prop.model === 'bookshelf' ||
+        prop.model === 'table'
+      ) {
+        let aoW = 3.2;
+        let aoD = 2.0;
+        if (prop.model === 'rock') {
+          aoW = 4.2;
+          aoD = 2.8;
+        } else if (prop.model === 'picnic_table') {
+          aoW = 2.8;
+          aoD = 3.4;
+        } else if (prop.model === 'bench') {
+          aoW = 2.4;
+          aoD = 1.6;
+        } else if (prop.model === 'planter') {
+          aoW = 1.8;
+          aoD = 1.4;
+        } else if (prop.model === 'bookshelf') {
+          aoW = 2.4;
+          aoD = 1.6;
+        } else if (prop.model === 'table') {
+          aoW = 2.2;
+          aoD = 1.8;
+        }
+        const aoGeo = new THREE.PlaneGeometry(aoW, aoD);
         aoGeo.rotateX(-Math.PI / 2);
         const aoMesh = new THREE.Mesh(aoGeo, aoMat);
         aoMesh.position.set(prop.x, prop.y + 0.015, prop.z);
@@ -814,7 +1475,7 @@ export function buildArenaMapScene(
     }
   }
 
-  // Atmospheric Biome Motes (Embers / Desert Dust / Arctic Snow Flurries)
+  // Atmospheric Biome Motes (Embers / Desert Dust / Arctic Snow Flurries / Pollen Motes)
   const moteCount = 160;
   const motePos = new Float32Array(moteCount * 3);
   const randMote = seededRand(909);
@@ -830,7 +1491,11 @@ export function buildArenaMapScene(
       ? 0xe0f2fe
       : map.id === 'helios-outpost'
         ? 0xfde68a
-        : 0xfdba74;
+        : map.id === 'estate-garden'
+          ? 0xa7f3d0
+          : map.id === 'safehouse-manor'
+            ? 0xfed7aa
+            : 0xfdba74;
   const moteMat = new THREE.PointsMaterial({
     map: moteTex,
     color: moteColor,
@@ -852,6 +1517,7 @@ export function buildArenaMapScene(
     jumpPadRings,
     radarDishes,
     ambientMotes,
+    cloudLayer: cloudInst,
     relicGroup,
     collidableMeshes,
     dispose: () => {

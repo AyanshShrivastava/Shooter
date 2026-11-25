@@ -1,4 +1,11 @@
-export type MapId = 'obsidian-foundry' | 'helios-outpost' | 'borealis-citadel';
+export type MapId =
+  | 'obsidian-foundry'
+  | 'helios-outpost'
+  | 'borealis-citadel'
+  | 'estate-garden'
+  | 'safehouse-manor'
+  | 'neon-rooftop'
+  | 'oasis-temple';
 
 export type GameMode = 'ffa' | 'duel' | 'skirmish';
 

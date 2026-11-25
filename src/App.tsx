@@ -29,12 +29,15 @@ const INITIAL_HUD: HudTelemetrySnapshot = {
   speedMs: 0,
   sliding: false,
   crouching: false,
+  sprinting: false,
   grounded: true,
   alive: true,
   respawnTimer: 0,
   perspective: 'first-person',
   hitmarkerKind: 'none',
   damageFlash: 0,
+  damageAngle: null,
+  killStreak: 0,
   pointerLocked: false,
   adsHeld: false,
   playerPos: [0, 0, 30],
@@ -113,6 +116,8 @@ export default function App() {
       if (msg.attackerId === myId && msg.targetId !== myId) {
         damageDealtRef.current += msg.damage;
         engineRef.current?.notifyHitConfirm(msg.newHp <= 0);
+      } else if (msg.targetId === myId && msg.attackerId !== myId) {
+        engineRef.current?.notifyLocalDamaged(msg.attackerId);
       }
     },
     onMatchEnded: (ev) => {

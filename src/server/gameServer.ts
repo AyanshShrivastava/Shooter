@@ -18,7 +18,7 @@ import {
   createInitialMoveState,
   stepCharacterMovement,
 } from '../game/physicsMovement';
-import { BotTacticalMemory, evaluateBotStep } from './botAi';
+import { BotTacticalMemory, evaluateBotStep, roleForWeapon } from './botAi';
 
 interface ConnectedClient {
   id: string;
@@ -118,6 +118,42 @@ export class ArenaGameServer {
       mapId: 'borealis-citadel',
       mode: 'duel',
       maxPlayers: 4,
+      fillBots: true,
+    });
+    this.createRoom({
+      id: 'srv-garden-eu',
+      name: 'Verdant Courtyard',
+      region: 'EU-Central',
+      mapId: 'estate-garden',
+      mode: 'ffa',
+      maxPlayers: 8,
+      fillBots: true,
+    });
+    this.createRoom({
+      id: 'srv-manor-us',
+      name: 'Safehouse Residence',
+      region: 'US-West',
+      mapId: 'safehouse-manor',
+      mode: 'skirmish',
+      maxPlayers: 8,
+      fillBots: true,
+    });
+    this.createRoom({
+      id: 'srv-neon-jp',
+      name: 'Neo Skydome 24',
+      region: 'Asia-East',
+      mapId: 'neon-rooftop',
+      mode: 'ffa',
+      maxPlayers: 8,
+      fillBots: true,
+    });
+    this.createRoom({
+      id: 'srv-oasis-me',
+      name: 'Sunken Sanctuary',
+      region: 'Middle-East',
+      mapId: 'oasis-temple',
+      mode: 'skirmish',
+      maxPlayers: 8,
       fillBots: true,
     });
   }
@@ -558,6 +594,10 @@ export class ArenaGameServer {
           hurtEvadeTimer: 0,
           hadLosPrev: false,
           lastKnownTargetPos: null,
+          role: roleForWeapon(weaponId),
+          stuckTimer: 0,
+          coverTarget: null,
+          coverTimer: 0,
         },
       });
     }
@@ -602,6 +642,10 @@ export class ArenaGameServer {
       bot.memory.hadLosPrev = false;
       bot.memory.lastKnownTargetPos = null;
       bot.memory.hurtEvadeTimer = 0;
+      bot.memory.coverTarget = null;
+      bot.memory.coverTimer = 0;
+      bot.memory.stuckTimer = 0;
+      bot.memory.lastPos = [sp.x, sp.y, sp.z];
     }
   }
 
@@ -713,7 +757,15 @@ export class ArenaGameServer {
   private endRoomRound(room: RoomInternal, winner: NetPlayerState): void {
     room.roundEndedTimer = 7.0;
     const standings = this.collectParticipants(room).sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-    const mapIds: MapId[] = ['obsidian-foundry', 'helios-outpost', 'borealis-citadel'];
+    const mapIds: MapId[] = [
+      'obsidian-foundry',
+      'helios-outpost',
+      'borealis-citadel',
+      'estate-garden',
+      'safehouse-manor',
+      'neon-rooftop',
+      'oasis-temple',
+    ];
     const nextMapId = mapIds[(mapIds.indexOf(room.info.mapId) + 1) % mapIds.length];
 
     this.broadcastRoom(room, {

@@ -3,6 +3,8 @@ import { NetPlayerState, WeaponId } from '../shared/types';
 import { WEAPONS } from '../shared/weapons';
 import { CharacterMoveInput, CharacterMoveState } from '../game/physicsMovement';
 
+export type BotRole = 'rusher' | 'sharpshooter' | 'flanker' | 'demolition';
+
 export interface BotTacticalMemory {
   patrolTarget: [number, number];
   patrolTimer: number;
@@ -14,6 +16,24 @@ export interface BotTacticalMemory {
   hurtEvadeTimer: number;
   hadLosPrev: boolean;
   lastKnownTargetPos: [number, number, number] | null;
+  role?: BotRole;
+  lastPos?: [number, number, number];
+  stuckTimer?: number;
+  coverTarget?: [number, number] | null;
+  coverTimer?: number;
+}
+
+export function roleForWeapon(weaponId: WeaponId): BotRole {
+  switch (weaponId) {
+    case 'scatter-gun':
+      return 'rusher';
+    case 'rail-rifle':
+      return 'sharpshooter';
+    case 'frag-launcher':
+      return 'demolition';
+    default:
+      return 'flanker';
+  }
 }
 
 function rayIntersectsAabb(
@@ -34,7 +54,6 @@ function rayIntersectsAabb(
   let tmin = 0;
   let tmax = maxDist;
 
-  // X slab
   if (Math.abs(dx) < 1e-6) {
     if (ox < minX || ox > maxX) return false;
   } else {
@@ -47,7 +66,6 @@ function rayIntersectsAabb(
     if (tmin > tmax) return false;
   }
 
-  // Y slab
   if (Math.abs(dy) < 1e-6) {
     if (oy < minY || oy > maxY) return false;
   } else {
@@ -60,7 +78,6 @@ function rayIntersectsAabb(
     if (tmin > tmax) return false;
   }
 
-  // Z slab
   if (Math.abs(dz) < 1e-6) {
     if (oz < minZ || oz > maxZ) return false;
   } else {
@@ -146,6 +163,65 @@ export function hasLineOfSight(
   return true;
 }
 
+function isInsideBoxXZ(x: number, z: number, map: ArenaMapSpec, pad = 0.9): boolean {
+  if (Math.abs(x) > map.halfExtent - pad || Math.abs(z) > map.halfExtent - pad) return true;
+  for (let i = 0; i < map.boxes.length; i++) {
+    const b = map.boxes[i];
+    if (b.h < 0.8) continue;
+    if (
+      x >= b.x - b.w * 0.5 - pad &&
+      x <= b.x + b.w * 0.5 + pad &&
+      z >= b.z - b.d * 0.5 - pad &&
+      z <= b.z + b.d * 0.5 + pad
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Finds the closest tactical cover point behind a solid structure that breaks sightline to a threat.
+ */
+export function findNearestCoverPoint(
+  botPos: [number, number, number],
+  threatPos: [number, number, number],
+  map: ArenaMapSpec,
+): [number, number] | null {
+  const threatEye: [number, number, number] = [threatPos[0], threatPos[1] + 1.35, threatPos[2]];
+  let bestSpot: [number, number] | null = null;
+  let bestScore = Infinity;
+
+  for (let i = 0; i < map.boxes.length; i++) {
+    const b = map.boxes[i];
+    if (b.h < 1.8) continue;
+    const margin = 1.45;
+    const candidates: Array<[number, number]> = [
+      [b.x + b.w * 0.5 + margin, b.z],
+      [b.x - b.w * 0.5 - margin, b.z],
+      [b.x, b.z + b.d * 0.5 + margin],
+      [b.x, b.z - b.d * 0.5 - margin],
+    ];
+
+    for (const [cx, cz] of candidates) {
+      if (isInsideBoxXZ(cx, cz, map, 0.75)) continue;
+      const distBot = Math.hypot(cx - botPos[0], cz - botPos[2]);
+      if (distBot > 22) continue;
+      const candidateEye: [number, number, number] = [cx, 1.35, cz];
+      if (!hasLineOfSight(candidateEye, threatEye, map)) {
+        const distThreat = Math.hypot(cx - threatPos[0], cz - threatPos[2]);
+        const score = distBot - Math.min(12, distThreat) * 0.25;
+        if (score < bestScore) {
+          bestScore = score;
+          bestSpot = [cx, cz];
+        }
+      }
+    }
+  }
+
+  return bestSpot;
+}
+
 function probeBoxAhead(
   x: number,
   y: number,
@@ -155,7 +231,7 @@ function probeBoxAhead(
   lookAhead: number,
   map: ArenaMapSpec,
 ): MapBox | null {
-  const steps = [1.1, lookAhead];
+  const steps = [1.05, lookAhead];
   for (const s of steps) {
     const px = x + dirX * s;
     const pz = z + dirZ * s;
@@ -194,10 +270,13 @@ function shortestAngleDiff(from: number, to: number): number {
   return d;
 }
 
-function weaponPreferredRange(weaponId: WeaponId): { min: number; max: number } {
+function weaponPreferredRange(weaponId: WeaponId, role: BotRole): { min: number; max: number } {
+  if (role === 'rusher') return { min: 3.5, max: 9.0 };
+  if (role === 'sharpshooter') return { min: 16.0, max: 30.0 };
+  if (role === 'demolition') return { min: 10.5, max: 21.0 };
   switch (weaponId) {
     case 'scatter-gun':
-      return { min: 4.5, max: 10.5 };
+      return { min: 4.0, max: 9.5 };
     case 'rail-rifle':
       return { min: 15.0, max: 28.0 };
     case 'frag-launcher':
@@ -226,9 +305,12 @@ export function evaluateBotStep(
   dt: number,
   rng: () => number = Math.random,
 ): BotStepDecision {
+  const role = mem.role ?? roleForWeapon(botState.weaponId);
+  mem.role = role;
+
   mem.strafeTimer -= dt;
   if (mem.strafeTimer <= 0) {
-    mem.strafeTimer = 0.85 + rng() * 1.15;
+    mem.strafeTimer = (role === 'rusher' ? 0.65 : 0.9) + rng() * 0.95;
     mem.strafeSign = rng() > 0.5 ? 1 : -1;
   }
 
@@ -236,8 +318,23 @@ export function evaluateBotStep(
   mem.hurtEvadeTimer = Math.max(0, mem.hurtEvadeTimer - dt);
   mem.fireCooldown = Math.max(0, mem.fireCooldown - dt);
   mem.patrolTimer -= dt;
+  mem.coverTimer = Math.max(0, (mem.coverTimer ?? 0) - dt);
 
-  // Score opponents by visibility + proximity so visible threats take priority over hidden targets behind walls
+  // Track movement progress to detect and break out of corner/obstacle snags
+  if (!mem.lastPos) {
+    mem.lastPos = [botState.x, botState.y, botState.z];
+    mem.stuckTimer = 0;
+  } else {
+    const movedDist = Math.hypot(botState.x - mem.lastPos[0], botState.z - mem.lastPos[2]);
+    if (movedDist < 0.25 * dt) {
+      mem.stuckTimer = (mem.stuckTimer ?? 0) + dt;
+    } else {
+      mem.stuckTimer = 0;
+    }
+    mem.lastPos = [botState.x, botState.y, botState.z];
+  }
+
+  // Score opponents by 3D visibility, proximity, and low-HP finish priority
   const botEye: [number, number, number] = [botState.x, botState.y + 1.48, botState.z];
   let bestTarget: NetPlayerState | null = null;
   let bestScore = -Infinity;
@@ -248,8 +345,10 @@ export function evaluateBotStep(
     if (other.id === botState.id || !other.alive) continue;
     const dist = Math.hypot(other.x - botState.x, other.y - botState.y, other.z - botState.z);
     const targetCenter: [number, number, number] = [other.x, other.y + 1.12, other.z];
-    const los = dist < 44 && hasLineOfSight(botEye, targetCenter, map);
-    const score = (los ? 60 : 0) - dist;
+    const los = dist < 48 && hasLineOfSight(botEye, targetCenter, map);
+    const lowHpBonus = other.hp <= 40 ? 18 : 0;
+    const humanBias = other.isBot ? 0 : 6;
+    const score = (los ? 65 : 0) + lowHpBonus + humanBias - dist;
     if (score > bestScore) {
       bestScore = score;
       bestTarget = other;
@@ -259,14 +358,50 @@ export function evaluateBotStep(
   }
 
   if (bestHasLos && !mem.hadLosPrev) {
-    // Brief human-like reaction window when first spotting an enemy
-    mem.reactionDelay = 0.18 + rng() * 0.18;
+    mem.reactionDelay = (role === 'sharpshooter' ? 0.16 : 0.2) + rng() * 0.18;
   }
   mem.hadLosPrev = bestHasLos;
   mem.reactionDelay = Math.max(0, mem.reactionDelay - dt);
 
   if (bestTarget && bestHasLos) {
     mem.lastKnownTargetPos = [bestTarget.x, bestTarget.y, bestTarget.z];
+  }
+
+  // Velocity lead prediction for aiming & grenade splash interception
+  let aimTargetX = bestTarget ? bestTarget.x : botState.x;
+  let aimTargetY = bestTarget ? bestTarget.y + 1.12 : botState.y + 1.12;
+  let aimTargetZ = bestTarget ? bestTarget.z : botState.z;
+  if (bestTarget) {
+    const leadTime =
+      botState.weaponId === 'frag-launcher'
+        ? Math.min(0.85, bestDist / 26)
+        : Math.min(0.28, 0.06 + bestDist * 0.005);
+    aimTargetX += bestTarget.vx * leadTime;
+    aimTargetZ += bestTarget.vz * leadTime;
+    if (botState.weaponId === 'frag-launcher') {
+      // Aim slightly toward lower center/feet for reliable grenade splash damage
+      aimTargetY = bestTarget.y + 0.35;
+    } else {
+      aimTargetY += bestTarget.vy * leadTime * 0.35;
+    }
+  }
+
+  // Low-HP tactical cover retreat decision
+  let retreatingToCover = false;
+  if (botState.hp <= 38 && bestTarget && bestHasLos) {
+    if (!mem.coverTarget || mem.coverTimer <= 0) {
+      mem.coverTarget = findNearestCoverPoint(
+        [botState.x, botState.y, botState.z],
+        [bestTarget.x, bestTarget.y, bestTarget.z],
+        map,
+      );
+      mem.coverTimer = 2.0;
+    }
+    if (mem.coverTarget) {
+      retreatingToCover = true;
+    }
+  } else if (botState.hp > 50) {
+    mem.coverTarget = null;
   }
 
   // Choose world-space navigation goal
@@ -281,23 +416,54 @@ export function evaluateBotStep(
     mem.patrolTarget = [goalX, goalZ];
   }
 
-  // Use nearby jump pad if pursuing an elevated opponent or rotating aggressively
-  let seekingJumpPad = false;
-  if (bestTarget && bestTarget.y > botState.y + 1.5 && botState.y < 1.0) {
-    let closestPadDist = 14;
+  let seekingElevation = false;
+  if (retreatingToCover && mem.coverTarget) {
+    goalX = mem.coverTarget[0];
+    goalZ = mem.coverTarget[1];
+  } else if (
+    (bestTarget && bestTarget.y > botState.y + 1.5 && botState.y < 1.0) ||
+    (role === 'sharpshooter' && botState.y < 1.5 && (!bestTarget || bestDist > 18))
+  ) {
+    // Pursue elevated targets or seek sniper high-ground via nearest jump pad or ramp
+    let bestElevScore = 15;
     for (const pad of map.jumpPads) {
       const d = Math.hypot(pad.x - botState.x, pad.z - botState.z);
-      if (d < closestPadDist) {
-        closestPadDist = d;
+      if (d < bestElevScore) {
+        bestElevScore = d;
         goalX = pad.x;
         goalZ = pad.z;
-        seekingJumpPad = true;
+        seekingElevation = true;
       }
     }
-  } else if (bestTarget) {
+    if (!seekingElevation && map.ramps.length > 0) {
+      let bestRampDist = 18;
+      for (const r of map.ramps) {
+        const d = Math.hypot(r.x - botState.x, r.z - botState.z);
+        if (d < bestRampDist) {
+          bestRampDist = d;
+          goalX = r.x;
+          goalZ = r.z;
+          seekingElevation = true;
+        }
+      }
+    }
+  }
+
+  if (!retreatingToCover && !seekingElevation && bestTarget) {
     if (bestHasLos) {
-      goalX = bestTarget.x;
-      goalZ = bestTarget.z;
+      if (role === 'flanker' && bestDist > 11) {
+        // Approach on a lateral flanking arc rather than straight down the centerline
+        const toBotX = botState.x - bestTarget.x;
+        const toBotZ = botState.z - bestTarget.z;
+        const len = Math.hypot(toBotX, toBotZ) || 1;
+        const perpX = (-toBotZ / len) * 6.5 * mem.strafeSign;
+        const perpZ = (toBotX / len) * 6.5 * mem.strafeSign;
+        goalX = bestTarget.x + perpX;
+        goalZ = bestTarget.z + perpZ;
+      } else {
+        goalX = bestTarget.x;
+        goalZ = bestTarget.z;
+      }
     } else if (mem.lastKnownTargetPos) {
       goalX = mem.lastKnownTargetPos[0];
       goalZ = mem.lastKnownTargetPos[2];
@@ -307,27 +473,24 @@ export function evaluateBotStep(
     }
   }
 
-  // Desired aim yaw (face enemy when in LOS, otherwise look along navigation direction)
   const navDx = goalX - botState.x;
   const navDz = goalZ - botState.z;
   const navDist = Math.hypot(navDx, navDz) || 1;
   const navYaw = Math.atan2(-navDx, -navDz);
 
   let desiredYaw = navYaw;
-  if (bestTarget && bestHasLos) {
-    desiredYaw = Math.atan2(-(bestTarget.x - botState.x), -(bestTarget.z - botState.z));
+  if (bestTarget && bestHasLos && !retreatingToCover) {
+    desiredYaw = Math.atan2(-(aimTargetX - botState.x), -(aimTargetZ - botState.z));
   }
 
-  // Smooth turn speed (fast enough to track strafing, realistic enough not to snap instantaneously)
   const yawDiff = shortestAngleDiff(botMove.yaw, desiredYaw);
-  const maxTurn = (bestHasLos ? 6.8 : 4.6) * dt;
+  const maxTurn = (bestHasLos ? 7.6 : 5.2) * dt;
   const nextYaw =
     Math.abs(yawDiff) <= maxTurn ? desiredYaw : botMove.yaw + Math.sign(yawDiff) * maxTurn;
 
-  // Obstacle feeler rays in world-space navigation direction
   const dirX = navDx / navDist;
   const dirZ = navDz / navDist;
-  const blockedCenter = probeBoxAhead(botState.x, botState.y, botState.z, dirX, dirZ, 2.8, map);
+  const blockedCenter = probeBoxAhead(botState.x, botState.y, botState.z, dirX, dirZ, 2.9, map);
 
   let forward = 0.9;
   let right = 0.25 * mem.strafeSign;
@@ -336,30 +499,36 @@ export function evaluateBotStep(
   let dashJustPressed = false;
   let sprintHeld = false;
 
-  if (bestTarget && bestHasLos && !seekingJumpPad) {
-    const pref = weaponPreferredRange(botState.weaponId);
+  if (retreatingToCover) {
+    forward = 1.0;
+    sprintHeld = true;
+    right = 0.2 * mem.strafeSign;
+    if (botMove.dashCooldownTimer <= 0) {
+      dashJustPressed = true;
+    } else if (Math.hypot(botMove.vx, botMove.vz) > 7.5 && botMove.slideCooldownTimer <= 0) {
+      crouchHeld = true;
+    }
+  } else if (bestTarget && bestHasLos && !seekingElevation) {
+    const pref = weaponPreferredRange(botState.weaponId, role);
     if (bestDist < pref.min) {
-      forward = -0.45;
-      right = 0.92 * mem.strafeSign;
+      forward = -0.55;
+      right = 0.95 * mem.strafeSign;
     } else if (bestDist <= pref.max) {
-      forward = 0.15;
-      right = 0.88 * mem.strafeSign;
+      forward = role === 'rusher' ? 0.45 : 0.12;
+      right = 0.92 * mem.strafeSign;
     } else {
-      forward = 0.92;
-      right = 0.45 * mem.strafeSign;
-      sprintHeld = bestDist > pref.max + 4;
+      forward = 0.95;
+      right = (role === 'flanker' ? 0.68 : 0.4) * mem.strafeSign;
+      sprintHeld = bestDist > pref.max + 3.5;
     }
   } else {
-    // Navigating around arena toward target or jump pad
     forward = 1.0;
-    sprintHeld = !blockedCenter && navDist > 7;
+    sprintHeld = !blockedCenter && navDist > 6.5;
     if (blockedCenter) {
       if (blockedCenter.y + blockedCenter.h - botState.y <= 1.55) {
-        // Low crate/cover — vault jump over it!
         jumpJustPressed = true;
       } else {
-        // Tall wall/bunker — probe left vs right flank direction
-        const angle = 0.72;
+        const angle = 0.78;
         const cosA = Math.cos(angle);
         const sinA = Math.sin(angle);
         const lx = dirX * cosA - dirZ * sinA;
@@ -371,30 +540,41 @@ export function evaluateBotStep(
         if (!leftBlocked && rightBlocked) mem.strafeSign = -1;
         else if (!rightBlocked && leftBlocked) mem.strafeSign = 1;
         forward = 0.35;
-        right = 0.95 * mem.strafeSign;
+        right = 0.98 * mem.strafeSign;
       }
     }
   }
 
-  // Reactive combat evasion: dash or crouch-slide when hurt
+  // Unstuck recovery if jammed against geometry for > 0.55s
+  if ((mem.stuckTimer ?? 0) > 0.55) {
+    mem.stuckTimer = 0;
+    mem.strafeSign = -mem.strafeSign;
+    jumpJustPressed = true;
+    right = 1.0 * mem.strafeSign;
+    forward = -0.35;
+    if (botMove.dashCooldownTimer <= 0) {
+      dashJustPressed = true;
+    }
+  }
+
+  // Reactive combat evasion when hurt
   if (mem.hurtEvadeTimer > 0) {
     right = 1.0 * mem.strafeSign;
     if (botMove.dashCooldownTimer <= 0) {
       dashJustPressed = true;
-    } else if (Math.hypot(botMove.vx, botMove.vz) > 7.5 && botMove.slideCooldownTimer <= 0) {
+    } else if (Math.hypot(botMove.vx, botMove.vz) > 7.2 && botMove.slideCooldownTimer <= 0) {
       crouchHeld = true;
     }
   }
 
-  // Occasional combat hop during close-range strafes
+  // Tactical crouch-juke or hop in active duels
   if (mem.jumpTimer <= 0) {
-    mem.jumpTimer = 2.4 + rng() * 2.8;
-    if (bestHasLos && bestDist < 16) {
+    mem.jumpTimer = (role === 'rusher' ? 1.8 : 2.5) + rng() * 2.4;
+    if (bestHasLos && bestDist < 18) {
       jumpJustPressed = true;
     }
   }
 
-  // Firing decision — strictly requires unobstructed 3D Line of Sight!
   let shouldFire = false;
   let didHit = false;
   let hitPoint: [number, number, number] | undefined;
@@ -408,33 +588,38 @@ export function evaluateBotStep(
     bestDist <= WEAPONS[botState.weaponId].range
   ) {
     const spec = WEAPONS[botState.weaponId];
-    // Pace bursts realistically based on weapon archetype
     const burstScale =
       spec.id === 'pulse-carbine'
-        ? 2.2
+        ? 2.0
         : spec.id === 'rail-rifle'
-          ? 1.5
+          ? 1.45
           : spec.id === 'scatter-gun'
-            ? 1.65
-            : 1.8;
-    mem.fireCooldown = spec.fireInterval * burstScale + rng() * 0.28;
+            ? 1.55
+            : 1.7;
+    mem.fireCooldown = spec.fireInterval * burstScale + rng() * 0.25;
     shouldFire = true;
 
-    const dx = bestTarget.x - botEye[0];
-    const dy = bestTarget.y + 1.12 - botEye[1];
-    const dz = bestTarget.z - botEye[2];
+    const dx = aimTargetX - botEye[0];
+    const dy = aimTargetY - botEye[1];
+    const dz = aimTargetZ - botEye[2];
     const len = Math.hypot(dx, dy, dz) || 1;
     fireDir = [dx / len, dy / len, dz / len];
 
-    // Accuracy scales cleanly with distance and angular alignment
-    const alignmentPenalty = Math.min(0.2, Math.abs(yawDiff) * 0.35);
-    const baseAcc = spec.id === 'rail-rifle' ? 0.44 : spec.id === 'scatter-gun' ? 0.48 : 0.36;
-    const hitChance = Math.max(0.14, baseAcc - bestDist * 0.0065 - alignmentPenalty);
+    const alignmentPenalty = Math.min(0.18, Math.abs(yawDiff) * 0.32);
+    const baseAcc =
+      spec.id === 'rail-rifle'
+        ? 0.46
+        : spec.id === 'scatter-gun'
+          ? 0.5
+          : spec.id === 'frag-launcher'
+            ? 0.44
+            : 0.38;
+    const hitChance = Math.max(0.16, baseAcc - bestDist * 0.006 - alignmentPenalty);
     didHit = rng() < hitChance;
     if (didHit) {
-      hitPoint = [bestTarget.x, bestTarget.y + 1.12, bestTarget.z];
+      hitPoint = [aimTargetX, aimTargetY, aimTargetZ];
     } else {
-      const missSpread = 0.08 + bestDist * 0.002;
+      const missSpread = 0.075 + bestDist * 0.0018;
       const mx = fireDir[0] + (rng() - 0.5) * missSpread;
       const my = fireDir[1] + (rng() - 0.5) * missSpread;
       const mz = fireDir[2] + (rng() - 0.5) * missSpread;

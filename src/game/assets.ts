@@ -17,6 +17,11 @@ const ASSET_URLS = {
   barrier: '/models/barrier/model.gltf',
   rock: '/models/rock/model.gltf',
   container: '/models/container/model.gltf',
+  bench: '/models/bench/model.gltf',
+  picnic_table: '/models/picnic_table/model.gltf',
+  planter: '/models/planter/model.gltf',
+  bookshelf: '/models/bookshelf/model.gltf',
+  table: '/models/table/model.gltf',
 } as const;
 
 export type GlbAssetKey = keyof typeof ASSET_URLS;
@@ -152,15 +157,17 @@ class AssetRegistry {
         color: 0x1e293b,
         roughness: 0.34,
         metalness: 0.82,
+        flatShading: true,
       });
       const gunGripMat = new THREE.MeshStandardMaterial({
         color: 0x09090b,
-        roughness: 0.8,
+        roughness: 0.82,
         metalness: 0.15,
+        flatShading: true,
       });
       const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.56), gunBodyMat);
       const gunBarrel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.018, 0.018, 0.36, 10),
+        new THREE.CylinderGeometry(0.018, 0.018, 0.36, 6),
         gunBodyMat,
       );
       gunBarrel.rotation.x = Math.PI / 2;
@@ -285,18 +292,21 @@ export function buildFirstPersonWeaponModel(weaponId: WeaponId): THREE.Group {
 
   const bodyMat = new THREE.MeshStandardMaterial({
     color: 0x1e293b,
-    roughness: 0.36,
+    roughness: 0.34,
     metalness: 0.78,
+    flatShading: true,
   });
   const gripMat = new THREE.MeshStandardMaterial({
     color: 0x09090b,
-    roughness: 0.85,
+    roughness: 0.86,
     metalness: 0.12,
+    flatShading: true,
   });
   const barrelMat = new THREE.MeshStandardMaterial({
     color: 0x64748b,
-    roughness: 0.2,
-    metalness: 0.92,
+    roughness: 0.22,
+    metalness: 0.9,
+    flatShading: true,
   });
 
   const accentColor =
@@ -311,9 +321,10 @@ export function buildFirstPersonWeaponModel(weaponId: WeaponId): THREE.Group {
   const glowMat = new THREE.MeshStandardMaterial({
     color: accentColor,
     emissive: accentColor,
-    emissiveIntensity: 1.7,
+    emissiveIntensity: 1.75,
     roughness: 0.18,
     metalness: 0.45,
+    flatShading: true,
   });
 
   if (weaponId === 'pulse-carbine') {
