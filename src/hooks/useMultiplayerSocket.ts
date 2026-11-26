@@ -229,6 +229,8 @@ export function useMultiplayerSocket(callbacks: MultiplayerCallbacks) {
       dir: [number, number, number];
       hitTargetId?: string;
       hitPoint?: [number, number, number];
+      isHeadshot?: boolean;
+      pelletsHit?: number;
     }) => {
       sendRaw({ type: 'player:fire', ...payload });
     },

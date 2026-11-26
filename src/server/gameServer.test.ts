@@ -6,12 +6,12 @@ import { NetPlayerState } from '../shared/types';
 import { ArenaGameServer } from './gameServer';
 import { BotTacticalMemory, evaluateBotStep, findNearestCoverPoint, hasLineOfSight } from './botAi';
 
-test('ArenaGameServer seeds 7 distinct maps and creates custom rooms', () => {
+test('ArenaGameServer seeds 9 distinct maps and creates custom rooms', () => {
   const srv = new ArenaGameServer();
   const initial = srv.listRooms();
-  assert.equal(initial.length, 7);
+  assert.equal(initial.length, 9);
   const maps = new Set(initial.map((r) => r.mapId));
-  assert.equal(maps.size, 7);
+  assert.equal(maps.size, 9);
 
   const custom = srv.createRoom({
     name: 'West Coast Skirmish',
@@ -23,7 +23,7 @@ test('ArenaGameServer seeds 7 distinct maps and creates custom rooms', () => {
   assert.equal(custom.name, 'West Coast Skirmish');
   assert.equal(custom.mapId, 'borealis-citadel');
   assert.equal(custom.scoreLimit, 20);
-  assert.equal(srv.listRooms().length, 8);
+  assert.equal(srv.listRooms().length, 10);
   srv.dispose();
 });
 

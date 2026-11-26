@@ -283,13 +283,30 @@ export const GameHud: React.FC<GameHudProps> = ({
             )}
 
             {hud.hitmarkerKind !== 'none' && (
-              <svg viewBox="0 0 24 24" className="w-7 h-7 absolute">
+              <svg
+                viewBox="0 0 24 24"
+                className={hud.hitmarkerKind === 'crit' ? 'w-8 h-8 absolute' : 'w-7 h-7 absolute'}
+              >
                 <path
                   d="M4 4l5 5M20 4l-5 5M4 20l5-5M20 20l-5-5"
-                  stroke={hud.hitmarkerKind === 'kill' ? '#ef4444' : '#f59e0b'}
-                  strokeWidth="2.5"
+                  stroke={
+                    hud.hitmarkerKind === 'kill'
+                      ? '#ef4444'
+                      : hud.hitmarkerKind === 'crit'
+                        ? '#fbbf24'
+                        : '#f59e0b'
+                  }
+                  strokeWidth={hud.hitmarkerKind === 'crit' ? '3' : '2.5'}
                   strokeLinecap="round"
                 />
+                {hud.hitmarkerKind === 'crit' && (
+                  <path
+                    d="M2.5 2.5l3 3M21.5 2.5l-3 3M2.5 21.5l3-3M21.5 21.5l-3-3"
+                    stroke="#fef08a"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                  />
+                )}
               </svg>
             )}
           </div>
@@ -523,6 +540,11 @@ export const GameHud: React.FC<GameHudProps> = ({
             <span className="text-[11px] font-semibold text-zinc-200 whitespace-nowrap">
               {activeWeapon.name}
             </span>
+            {hud.autoFireEnabled && (
+              <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                AUTO
+              </span>
+            )}
             <span className="h-3.5 w-px bg-zinc-700" />
             <span
               className={`font-mono-tabular text-xs font-bold whitespace-nowrap ${

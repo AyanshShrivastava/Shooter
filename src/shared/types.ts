@@ -5,7 +5,9 @@ export type MapId =
   | 'estate-garden'
   | 'safehouse-manor'
   | 'neon-rooftop'
-  | 'oasis-temple';
+  | 'oasis-temple'
+  | 'cyber-harbor'
+  | 'zen-pagoda';
 
 export type GameMode = 'ffa' | 'duel' | 'skirmish';
 
@@ -162,6 +164,8 @@ export type ClientToServerMessage =
       dir: [number, number, number];
       hitTargetId?: string;
       hitPoint?: [number, number, number];
+      isHeadshot?: boolean;
+      pelletsHit?: number;
     }
   | { type: 'player:respawn_request' }
   | { type: 'chat:send'; channel: 'global' | 'room'; text: string };
@@ -202,6 +206,7 @@ export type ServerToClientMessage =
       damage: number;
       newHp: number;
       weaponId: WeaponId;
+      isHeadshot?: boolean;
     }
   | { type: 'killfeed:add'; item: KillFeedItem }
   | {

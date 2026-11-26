@@ -110,21 +110,24 @@ class TacticalAudio {
     osc.stop(now + 0.25);
   }
 
-  public playHitmarker(isKill: boolean): void {
+  public playHitmarker(kind: 'hit' | 'crit' | 'kill'): void {
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
 
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(isKill ? 1480 : 1120, now);
-    osc.frequency.exponentialRampToValueAtTime(isKill ? 1960 : 880, now + (isKill ? 0.12 : 0.055));
-    gain.gain.setValueAtTime(isKill ? 0.2 : 0.14, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + (isKill ? 0.14 : 0.06));
+    osc.type = kind === 'crit' ? 'triangle' : 'sine';
+    const startFreq = kind === 'kill' ? 1480 : kind === 'crit' ? 1680 : 1120;
+    const endFreq = kind === 'kill' ? 1960 : kind === 'crit' ? 2280 : 880;
+    const dur = kind === 'kill' ? 0.14 : kind === 'crit' ? 0.1 : 0.06;
+    osc.frequency.setValueAtTime(startFreq, now);
+    osc.frequency.exponentialRampToValueAtTime(endFreq, now + dur);
+    gain.gain.setValueAtTime(kind === 'hit' ? 0.14 : 0.21, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
     osc.connect(gain).connect(ctx.destination);
     osc.start(now);
-    osc.stop(now + 0.15);
+    osc.stop(now + dur + 0.01);
   }
 
   public playFootstep(sprint: boolean): void {

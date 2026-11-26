@@ -156,6 +156,24 @@ export class ArenaGameServer {
       maxPlayers: 8,
       fillBots: true,
     });
+    this.createRoom({
+      id: 'srv-harbor-eu',
+      name: 'Port Meridian',
+      region: 'EU-North',
+      mapId: 'cyber-harbor',
+      mode: 'ffa',
+      maxPlayers: 8,
+      fillBots: true,
+    });
+    this.createRoom({
+      id: 'srv-pagoda-ap',
+      name: 'Kitsune Shrine',
+      region: 'Asia-East',
+      mapId: 'zen-pagoda',
+      mode: 'skirmish',
+      maxPlayers: 8,
+      fillBots: true,
+    });
   }
 
   public createRoom(opts: {
@@ -403,7 +421,17 @@ export class ArenaGameServer {
         if (!room || room.roundEndedTimer > 0) return;
         const shooter = room.players.get(client.id);
         if (!shooter || !shooter.alive) return;
-        this.processWeaponFire(room, shooter, msg.weaponId, msg.origin, msg.dir, msg.hitTargetId, msg.hitPoint);
+        this.processWeaponFire(
+          room,
+          shooter,
+          msg.weaponId,
+          msg.origin,
+          msg.dir,
+          msg.hitTargetId,
+          msg.hitPoint,
+          msg.isHeadshot,
+          msg.pelletsHit,
+        );
         break;
       }
       case 'player:respawn_request': {
@@ -657,6 +685,8 @@ export class ArenaGameServer {
     dir: [number, number, number],
     hitTargetId?: string,
     hitPoint?: [number, number, number],
+    isHeadshot = false,
+    pelletsHit?: number,
   ): void {
     const spec = WEAPONS[weaponId] ?? WEAPONS['pulse-carbine'];
 
@@ -685,7 +715,7 @@ export class ArenaGameServer {
         if (dist <= spec.explosionRadius) {
           const factor = Math.max(0.25, 1 - dist / spec.explosionRadius);
           const dmg = Math.round(spec.damage * factor);
-          this.applyDamage(room, target, shooter, dmg, spec.id);
+          this.applyDamage(room, target, shooter, dmg, spec.id, false);
         }
       }
       return;
@@ -696,8 +726,14 @@ export class ArenaGameServer {
       if (target && target.alive && target.id !== shooter.id) {
         const dist = Math.hypot(target.x - shooter.x, target.y - shooter.y, target.z - shooter.z);
         if (dist <= spec.range + 5) {
-          const dmg = spec.pellets > 1 ? Math.round(spec.damage * 4.5) : spec.damage;
-          this.applyDamage(room, target, shooter, dmg, spec.id);
+          const validPellets =
+            spec.pellets > 1
+              ? Math.max(1, Math.min(spec.pellets, Math.round(pelletsHit ?? (shooter.isBot ? 2 : 4))))
+              : 1;
+          const headMult = isHeadshot ? 1.5 : 1.0;
+          const botDamageMult = shooter.isBot ? 0.72 : 1.0;
+          const dmg = Math.max(4, Math.round(spec.damage * validPellets * headMult * botDamageMult));
+          this.applyDamage(room, target, shooter, dmg, spec.id, Boolean(isHeadshot));
         }
       }
     }
@@ -709,6 +745,7 @@ export class ArenaGameServer {
     attacker: NetPlayerState,
     damage: number,
     weaponId: WeaponId,
+    isHeadshot = false,
   ): void {
     if (!target.alive || room.roundEndedTimer > 0) return;
     const protectUntil = this.spawnProtectUntil.get(target.id) ?? 0;
@@ -717,7 +754,9 @@ export class ArenaGameServer {
     target.hp = Math.max(0, target.hp - damage);
     const hurtBot = room.bots.get(target.id);
     if (hurtBot && target.hp > 0) {
-      hurtBot.memory.hurtEvadeTimer = 0.65;
+      if (target.hp <= 45 && Math.random() < 0.35) {
+        hurtBot.memory.hurtEvadeTimer = 0.45;
+      }
       hurtBot.memory.strafeSign = Math.random() > 0.5 ? 1 : -1;
       hurtBot.memory.lastKnownTargetPos = [attacker.x, attacker.y, attacker.z];
     }
@@ -728,6 +767,7 @@ export class ArenaGameServer {
       damage,
       newHp: target.hp,
       weaponId,
+      isHeadshot,
     });
 
     if (target.hp <= 0) {
@@ -736,7 +776,7 @@ export class ArenaGameServer {
       target.respawnTimer = 2.8;
       if (attacker.id !== target.id) {
         attacker.kills += 1;
-        attacker.score += 100;
+        attacker.score += isHeadshot ? 150 : 100;
       }
       const killItem: KillFeedItem = {
         id: this.nextId('kf'),
@@ -765,6 +805,8 @@ export class ArenaGameServer {
       'safehouse-manor',
       'neon-rooftop',
       'oasis-temple',
+      'cyber-harbor',
+      'zen-pagoda',
     ];
     const nextMapId = mapIds[(mapIds.indexOf(room.info.mapId) + 1) % mapIds.length];
 

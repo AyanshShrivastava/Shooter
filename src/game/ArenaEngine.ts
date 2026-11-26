@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ARENA_MAPS, ArenaMapSpec } from '../shared/maps';
@@ -14,7 +15,12 @@ import {
 import { WEAPON_ORDER, WEAPONS } from '../shared/weapons';
 import { assetRegistry, buildFirstPersonWeaponModel } from './assets';
 import { tacticalAudio } from './audio';
-import { buildArenaMapScene, BuiltArenaScene, setupSceneEnvironment } from './mapBuilder';
+import {
+  buildArenaMapScene,
+  BuiltArenaScene,
+  preloadPbrTextures,
+  setupSceneEnvironment,
+} from './mapBuilder';
 import {
   ArenaPhysicsWorld,
   CharacterMoveInput,
@@ -27,6 +33,13 @@ import {
   stepArenaPhysicsWorld,
   stepCharacterMovement,
 } from './physicsMovement';
+import {
+  computeEffectiveSpread,
+  computeHitZone,
+  evaluateTouchAimAssist,
+  TargetBodyCenter,
+  updateFireInputBuffer,
+} from './shooting';
 
 export interface HudTelemetrySnapshot {
   hp: number;
@@ -45,7 +58,7 @@ export interface HudTelemetrySnapshot {
   alive: boolean;
   respawnTimer: number;
   perspective: CameraPerspective;
-  hitmarkerKind: 'none' | 'hit' | 'kill';
+  hitmarkerKind: 'none' | 'hit' | 'crit' | 'kill';
   damageFlash: number;
   damageAngle: number | null;
   killStreak: number;
@@ -54,6 +67,7 @@ export interface HudTelemetrySnapshot {
   playerPos: [number, number, number];
   playerYaw: number;
   spreadRatio: number;
+  autoFireEnabled: boolean;
 }
 
 export interface EngineCallbacks {
@@ -78,6 +92,8 @@ export interface EngineCallbacks {
     dir: [number, number, number];
     hitTargetId?: string;
     hitPoint?: [number, number, number];
+    isHeadshot?: boolean;
+    pelletsHit?: number;
   }) => void;
   onShotStats?: (didHit: boolean) => void;
   onPointerLockChange?: (locked: boolean) => void;
@@ -125,6 +141,8 @@ const _vec3A = new THREE.Vector3();
 const _vec3B = new THREE.Vector3();
 const _vec3C = new THREE.Vector3();
 const _vec3D = new THREE.Vector3();
+const _tracerStart = new THREE.Vector3();
+const _tracerEnd = new THREE.Vector3();
 const _quatA = new THREE.Quaternion();
 const _mat4A = new THREE.Matrix4();
 const _scaleVec = new THREE.Vector3();
@@ -168,6 +186,7 @@ export class ArenaEngine {
   private isSoftwareGl: boolean;
   private renderer: THREE.WebGLRenderer;
   private composer: EffectComposer | null = null;
+  private ssaoPass: SSAOPass | null = null;
   private bloomPass: UnrealBloomPass | null = null;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
@@ -193,6 +212,8 @@ export class ArenaEngine {
   private dashJustPressed = false;
   private mouseFiring = false;
   private touchFiring = false;
+  private touchMode = false;
+  private autoFireEnabled = false;
   private adsHeld = false;
   private draggingLook = false;
   private lastDragX = 0;
@@ -212,12 +233,14 @@ export class ArenaEngine {
     'frag-launcher': WEAPONS['frag-launcher'].magSize,
   };
   private fireCooldown = 0;
+  private fireBufferTimer = 0;
+  private weaponBloom = 0;
   private reloading = false;
   private reloadTimer = 0;
   private fireTriggerConsumed = false;
   private recoilPitch = 0;
   private recoilKickZ = 0;
-  private hitmarkerKind: 'none' | 'hit' | 'kill' = 'none';
+  private hitmarkerKind: 'none' | 'hit' | 'crit' | 'kill' = 'none';
   private hitmarkerTimer = 0;
   private damageFlash = 0;
   private damageAngle: number | null = null;
@@ -226,11 +249,16 @@ export class ArenaEngine {
   private trauma = 0;
   private lastStrideFootstep = 0;
 
+  // Scratch pools for zero-alloc per-frame shooting & aim-assist
+  private rayTargetsScratch: THREE.Object3D[] = [];
+  private touchAssistTargetsScratch: TargetBodyCenter[] = [];
+
   // First-person weapon rig & local third-person character rig
   private fpWeaponHolder = new THREE.Group();
   private fpWeaponMesh: THREE.Group | null = null;
   private localTpRig: RemoteActorVisual | null = null;
   private muzzleLight = new THREE.PointLight(0xffb74d, 0, 12, 1.8);
+  private muzzleFlashMesh: THREE.Mesh;
   private muzzleFlashTimer = 0;
 
   // Remote actors & bots
@@ -275,7 +303,7 @@ export class ArenaEngine {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.14;
+    this.renderer.toneMappingExposure = 0.78;
     this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -296,6 +324,19 @@ export class ArenaEngine {
     this.muzzleLight.position.set(0.22, -0.15, -0.9);
     this.camera.add(this.muzzleLight);
 
+    const flashGeo = new THREE.OctahedronGeometry(0.095, 0);
+    const flashMat = new THREE.MeshBasicMaterial({
+      color: 0xfde047,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this.muzzleFlashMesh = new THREE.Mesh(flashGeo, flashMat);
+    this.muzzleFlashMesh.position.set(0.24, -0.17, -1.04);
+    this.muzzleFlashMesh.visible = false;
+    this.fpWeaponHolder.add(this.muzzleFlashMesh);
+
     this.disposeEnv = setupSceneEnvironment(this.scene, this.renderer, this.currentMap);
 
     if (!this.isSoftwareGl) {
@@ -303,7 +344,12 @@ export class ArenaEngine {
       const h = container.clientHeight || window.innerHeight;
       this.composer = new EffectComposer(this.renderer);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
-      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.3, 0.35, 0.88);
+      this.ssaoPass = new SSAOPass(this.scene, this.camera, w, h, 16);
+      this.ssaoPass.kernelRadius = 0.6;
+      this.ssaoPass.minDistance = 0.002;
+      this.ssaoPass.maxDistance = 0.075;
+      this.composer.addPass(this.ssaoPass);
+      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.18, 0.25, 1.22);
       this.composer.addPass(this.bloomPass);
       this.composer.addPass(new OutputPass());
     }
@@ -372,10 +418,14 @@ export class ArenaEngine {
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(this.container);
 
-    // Preload GLB assets and refresh map/character rigs once available
+    // Preload 1K PBR textures and GLB models, refreshing live scene once loaded
+    preloadPbrTextures(this.renderer).then(() => {
+      if (this.disposed) return;
+      this.loadMap(this.currentMap.id, false, true);
+    });
     assetRegistry.preloadAll().then(() => {
       if (this.disposed) return;
-      this.loadMap(this.currentMap.id, false);
+      this.loadMap(this.currentMap.id, false, true);
       this.rebuildLocalTpRig();
     });
 
@@ -423,6 +473,8 @@ export class ArenaEngine {
     } else {
       this.fpWeaponHolder.visible = this.perspective === 'first-person';
       if (this.localTpRig) this.localTpRig.root.visible = this.perspective === 'third-person';
+      this.hudSyncAccum = 0.2;
+      this.updateCameraRig(0.016);
     }
   }
 
@@ -434,20 +486,25 @@ export class ArenaEngine {
     }
   }
 
-  public loadMap(mapId: ArenaMapSpec['id'], resetSpawn = true): void {
+  public loadMap(mapId: ArenaMapSpec['id'], resetSpawn = true, forceRebuild = false): void {
     const spec = ARENA_MAPS[mapId] ?? ARENA_MAPS['obsidian-foundry'];
+    const sameMapAlreadyBuilt = !forceRebuild && this.builtMap !== null && this.currentMap.id === spec.id;
     this.currentMap = spec;
 
-    if (this.builtMap) {
-      this.builtMap.dispose();
-      this.builtMap = null;
-    }
-    this.clearProjectiles();
+    if (!sameMapAlreadyBuilt) {
+      if (this.builtMap) {
+        this.builtMap.dispose();
+        this.builtMap = null;
+      }
+      this.clearProjectiles();
 
-    this.disposeEnv();
-    this.disposeEnv = setupSceneEnvironment(this.scene, this.renderer, spec);
-    this.builtMap = buildArenaMapScene(this.scene, spec, this.renderer, this.isSoftwareGl);
-    this.physicsWorld = createArenaPhysicsWorld(spec);
+      this.disposeEnv();
+      this.disposeEnv = setupSceneEnvironment(this.scene, this.renderer, spec);
+      this.builtMap = buildArenaMapScene(this.scene, spec, this.renderer, this.isSoftwareGl);
+      this.physicsWorld = createArenaPhysicsWorld(spec);
+    } else {
+      this.clearProjectiles();
+    }
 
     if (resetSpawn) {
       const sp = spec.spawnPoints[0];
@@ -559,15 +616,17 @@ export class ArenaEngine {
     }
   }
 
-  public notifyHitConfirm(isKill: boolean): void {
-    this.hitmarkerKind = isKill ? 'kill' : 'hit';
-    this.hitmarkerTimer = isKill ? 0.32 : 0.16;
-    if (isKill) {
+  public notifyHitConfirm(kind: 'hit' | 'crit' | 'kill'): void {
+    this.hitmarkerKind = kind;
+    this.hitmarkerTimer = kind === 'kill' ? 0.32 : kind === 'crit' ? 0.22 : 0.16;
+    if (kind === 'kill') {
       this.killStreak += 1;
       this.hitstopTimer = 0.035;
       this.trauma = Math.min(1, this.trauma + 0.28);
+    } else if (kind === 'crit') {
+      this.trauma = Math.min(1, this.trauma + 0.12);
     }
-    tacticalAudio.playHitmarker(isKill);
+    tacticalAudio.playHitmarker(kind);
   }
 
   public notifyLocalDamaged(attackerId: string): void {
@@ -581,23 +640,68 @@ export class ArenaEngine {
   }
 
   // Mobile / Touch Input API
+  public setTouchMode(enabled: boolean): void {
+    this.touchMode = enabled;
+  }
+
+  public setAutoFire(enabled: boolean): void {
+    this.autoFireEnabled = enabled;
+  }
+
+  public toggleAutoFire(): boolean {
+    this.autoFireEnabled = !this.autoFireEnabled;
+    this.hudSyncAccum = 0.2;
+    return this.autoFireEnabled;
+  }
+
   public setTouchMove(x: number, y: number, sprint: boolean): void {
     this.touchMoveX = Math.max(-1, Math.min(1, x));
     this.touchMoveY = Math.max(-1, Math.min(1, y));
     this.touchSprint = sprint;
   }
 
+  private evaluateMobileAssist() {
+    this.camera.getWorldPosition(_vec3A);
+    this.camera.getWorldDirection(_vec3B);
+    this.touchAssistTargetsScratch.length = 0;
+    for (const actor of this.remoteActors.values()) {
+      if (!actor.alive) continue;
+      this.touchAssistTargetsScratch.push({
+        id: actor.id,
+        x: actor.root.position.x,
+        y: actor.root.position.y + 1.25,
+        z: actor.root.position.z,
+      });
+    }
+    return evaluateTouchAimAssist({
+      camPos: [_vec3A.x, _vec3A.y, _vec3A.z],
+      camDir: [_vec3B.x, _vec3B.y, _vec3B.z],
+      targets: this.touchAssistTargetsScratch,
+      maxRange: WEAPONS[this.weaponId].range,
+    });
+  }
+
   public addTouchLook(dx: number, dy: number): void {
     if (this.appState !== 'playing') return;
-    this.moveState.yaw -= dx * this.sensitivity * 1.45;
+    const assist = this.evaluateMobileAssist();
+    const scale = assist.lookScale * 1.45;
+    this.moveState.yaw -= dx * this.sensitivity * scale;
     this.moveState.pitch = Math.max(
       -1.4,
-      Math.min(1.4, this.moveState.pitch - dy * this.sensitivity * 1.45),
+      Math.min(1.4, this.moveState.pitch - dy * this.sensitivity * scale),
     );
   }
 
   public setTouchFiring(firing: boolean): void {
+    const justPressed = firing && !this.touchFiring;
     this.touchFiring = firing;
+    if (justPressed) {
+      this.fireBufferTimer = updateFireInputBuffer({
+        currentBuffer: this.fireBufferTimer,
+        justPressed: true,
+        dt: 0,
+      });
+    }
     if (!firing) this.fireTriggerConsumed = false;
   }
 
@@ -619,6 +723,7 @@ export class ArenaEngine {
 
   public toggleAds(): boolean {
     this.adsHeld = !this.adsHeld;
+    this.hudSyncAccum = 0.2;
     return this.adsHeld;
   }
 
@@ -627,6 +732,7 @@ export class ArenaEngine {
     this.weaponId = id;
     this.reloading = false;
     this.reloadTimer = 0;
+    this.hudSyncAccum = 0.2;
 
     if (this.fpWeaponMesh) {
       this.fpWeaponHolder.remove(this.fpWeaponMesh);
@@ -774,6 +880,9 @@ export class ArenaEngine {
     if (this.composer) {
       this.composer.setSize(w, h);
     }
+    if (this.ssaoPass) {
+      this.ssaoPass.setSize(w, h);
+    }
     if (this.bloomPass) {
       this.bloomPass.resolution.set(w, h);
     }
@@ -853,6 +962,13 @@ export class ArenaEngine {
         this.lastDragX = e.clientX;
         this.lastDragY = e.clientY;
       }
+      if (!this.mouseFiring) {
+        this.fireBufferTimer = updateFireInputBuffer({
+          currentBuffer: this.fireBufferTimer,
+          justPressed: true,
+          dt: 0,
+        });
+      }
       this.mouseFiring = true;
     } else if (e.button === 2) {
       this.adsHeld = true;
@@ -920,6 +1036,14 @@ export class ArenaEngine {
     colorHex: string,
     count: number,
   ): void {
+    if (this.appState === 'playing' && this.perspective === 'first-person') {
+      const dx = x - this.camera.position.x;
+      const dy = y - this.camera.position.y;
+      const dz = z - this.camera.position.z;
+      if (dx * dx + dy * dy + dz * dz < 1.96) {
+        return;
+      }
+    }
     for (let i = 0; i < count; i++) {
       const slot = this.particles[this.particleCursor];
       this.particleCursor = (this.particleCursor + 1) % this.MAX_PARTICLES;
@@ -947,13 +1071,13 @@ export class ArenaEngine {
     colorHex: string,
   ): void {
     const slot = this.tracers.find((t) => t.life <= 0) ?? this.tracers[0];
-    _vec3A.set(origin[0], origin[1], origin[2]);
-    _vec3B.set(end[0], end[1], end[2]);
-    const dist = _vec3A.distanceTo(_vec3B);
+    _tracerStart.set(origin[0], origin[1], origin[2]);
+    _tracerEnd.set(end[0], end[1], end[2]);
+    const dist = _tracerStart.distanceTo(_tracerEnd);
     if (dist < 0.2) return;
 
-    slot.mesh.position.copy(_vec3A).lerp(_vec3B, 0.5);
-    slot.mesh.lookAt(_vec3B);
+    slot.mesh.position.copy(_tracerStart).lerp(_tracerEnd, 0.5);
+    slot.mesh.lookAt(_tracerEnd);
     slot.mesh.scale.set(1, 1, dist);
     const mat = slot.mesh.material as THREE.MeshBasicMaterial;
     mat.color.set(colorHex);
@@ -965,9 +1089,19 @@ export class ArenaEngine {
 
   private tryFireWeapon(): void {
     const spec = WEAPONS[this.weaponId];
-    const wantsFire = this.mouseFiring || this.touchFiring;
+    let autoTrigger = false;
+    let assistMagnetDir: [number, number, number] | null = null;
+    if (this.touchMode) {
+      const assist = this.evaluateMobileAssist();
+      assistMagnetDir = assist.magnetDir;
+      autoTrigger = this.autoFireEnabled && assist.autoFireLocked;
+    }
+
+    const manualHeld = this.mouseFiring || this.touchFiring;
+    const bufferedTrigger = !spec.automatic && this.fireBufferTimer > 0 && !this.fireTriggerConsumed;
+    const wantsFire = manualHeld || bufferedTrigger || autoTrigger;
     if (!wantsFire || !this.localAlive || this.reloading || this.fireCooldown > 0) return;
-    if (!spec.automatic && this.fireTriggerConsumed) return;
+    if (!spec.automatic && this.fireTriggerConsumed && !bufferedTrigger && !autoTrigger) return;
 
     if (this.ammoMap[this.weaponId] <= 0) {
       this.startReload();
@@ -975,29 +1109,38 @@ export class ArenaEngine {
     }
 
     this.fireTriggerConsumed = true;
+    this.fireBufferTimer = 0;
     this.fireCooldown = spec.fireInterval;
     this.ammoMap[this.weaponId] -= 1;
 
     tacticalAudio.playFire(this.weaponId);
     this.recoilPitch += spec.recoilPitch;
     this.recoilKickZ += spec.recoilKick;
+    this.weaponBloom = Math.min(0.032, this.weaponBloom + (spec.id === 'pulse-carbine' ? 0.004 : 0.009));
     this.trauma = Math.min(1, this.trauma + (spec.id === 'pulse-carbine' ? 0.12 : 0.26));
     this.muzzleLight.color.set(spec.color);
-    this.muzzleLight.intensity = 4.2;
+    this.muzzleLight.intensity = 4.5;
+    (this.muzzleFlashMesh.material as THREE.MeshBasicMaterial).color.set(spec.color);
+    this.muzzleFlashMesh.visible = this.perspective === 'first-person';
+    this.muzzleFlashMesh.rotation.z = Math.random() * Math.PI * 2;
     this.muzzleFlashTimer = 0.055;
 
     // Raycast origin from camera center
     this.camera.getWorldPosition(_vec3A);
     this.camera.getWorldDirection(_vec3B);
+    if (assistMagnetDir && spec.pellets === 1 && spec.projectileSpeed === 0) {
+      _vec3B.set(assistMagnetDir[0], assistMagnetDir[1], assistMagnetDir[2]).normalize();
+    }
 
+    _vec3D.crossVectors(_vec3B, this.camera.up).normalize();
+    const rightOffset = this.adsHeld ? 0.04 : 0.22;
     const visualOrigin: [number, number, number] = [
-      _vec3A.x + _vec3B.x * 0.5,
-      _vec3A.y + _vec3B.y * 0.5 - 0.12,
-      _vec3A.z + _vec3B.z * 0.5,
+      _vec3A.x + _vec3B.x * 0.72 + _vec3D.x * rightOffset,
+      _vec3A.y + _vec3B.y * 0.72 - 0.14,
+      _vec3A.z + _vec3B.z * 0.72 + _vec3D.z * rightOffset,
     ];
 
     if (spec.projectileSpeed > 0 && this.physicsWorld) {
-      // Frag launcher physical grenade
       const proj = spawnPhysicsProjectile(
         this.physicsWorld,
         `lproj-${Date.now()}-${Math.random()}`,
@@ -1022,18 +1165,28 @@ export class ArenaEngine {
       return;
     }
 
-    // Hitscan pellets (1 for rifles, 7 for scatter gun)
-    const rayTargets: THREE.Object3D[] = [];
+    // Zero-alloc raycast against lightweight analytical colliders + live enemy hitboxes
+    this.rayTargetsScratch.length = 0;
     if (this.builtMap) {
-      for (const cm of this.builtMap.collidableMeshes) rayTargets.push(cm);
+      for (const cm of this.builtMap.raycastColliders) this.rayTargetsScratch.push(cm);
     }
     for (const actor of this.remoteActors.values()) {
-      if (actor.alive) rayTargets.push(actor.hitbox);
+      if (actor.alive) this.rayTargetsScratch.push(actor.hitbox);
     }
 
-    const spreadFactor = this.adsHeld ? spec.spread * 0.45 : spec.spread;
+    const speedMs = Math.hypot(this.moveState.vx, this.moveState.vz);
+    const spreadFactor = computeEffectiveSpread({
+      baseSpread: spec.spread,
+      speedMs,
+      adsHeld: this.adsHeld,
+      weaponBloom: this.weaponBloom,
+      grounded: this.moveState.grounded,
+    });
+
     let bestTargetId: string | undefined;
     let bestHitPoint: [number, number, number] | undefined;
+    let pelletsHit = 0;
+    let anyHeadshot = false;
 
     for (let p = 0; p < spec.pellets; p++) {
       _vec3C.copy(_vec3B);
@@ -1044,7 +1197,7 @@ export class ArenaEngine {
 
       _raycaster.set(_vec3A, _vec3C);
       _raycaster.far = spec.range;
-      const hits = _raycaster.intersectObjects(rayTargets, false);
+      const hits = _raycaster.intersectObjects(this.rayTargetsScratch, false);
 
       if (hits.length > 0) {
         const hit = hits[0];
@@ -1055,8 +1208,18 @@ export class ArenaEngine {
         const targetPlayerId = hit.object.userData.targetPlayerId as string | undefined;
         const crateId = hit.object.userData.crateId as string | undefined;
         if (targetPlayerId) {
+          pelletsHit += 1;
           bestTargetId = targetPlayerId;
           bestHitPoint = hp;
+          const actor = this.remoteActors.get(targetPlayerId);
+          if (actor) {
+            const hz = computeHitZone({
+              hitY: hit.point.y,
+              actorBaseY: actor.root.position.y,
+              actorHeight: 1.9,
+            });
+            if (hz.isHeadshot) anyHeadshot = true;
+          }
         } else if (crateId && this.physicsWorld) {
           applyCrateImpulse(
             this.physicsWorld,
@@ -1086,6 +1249,8 @@ export class ArenaEngine {
       dir: [_vec3B.x, _vec3B.y, _vec3B.z],
       hitTargetId: bestTargetId,
       hitPoint: bestHitPoint,
+      isHeadshot: anyHeadshot,
+      pelletsHit: pelletsHit > 0 ? pelletsHit : undefined,
     });
   }
 
@@ -1095,14 +1260,13 @@ export class ArenaEngine {
     const rawDt = this.clock.getDelta();
     const dt = Math.min(rawDt, 0.05);
 
-    // Hitstop timer freezes simulation momentarily on kills while visuals/camera shake continue
     if (this.hitstopTimer > 0) {
       this.hitstopTimer = Math.max(0, this.hitstopTimer - dt);
     }
 
     const simDt = this.hitstopTimer > 0 ? dt * 0.08 : dt;
 
-    // Update arena animations (jump pads, radar arrays, biome motes, spinning artifact)
+    // Update arena animations (jump pads, radar arrays, biome motes, Sky clouds, spinning artifact)
     if (this.builtMap) {
       const t = this.clock.elapsedTime;
       for (const ring of this.builtMap.jumpPadRings) {
@@ -1116,6 +1280,9 @@ export class ArenaEngine {
       }
       if (this.builtMap.cloudLayer) {
         this.builtMap.cloudLayer.rotation.y += dt * 0.006;
+      }
+      if (this.builtMap.skyMesh) {
+        this.builtMap.skyMesh.material.uniforms['time'].value = t * 1.5;
       }
       if (this.builtMap.relicGroup) {
         this.builtMap.relicGroup.rotation.y += dt * 0.9;
@@ -1158,6 +1325,12 @@ export class ArenaEngine {
   private updateGameplay(simDt: number, realDt: number): void {
     // Cooldowns & timers
     if (this.fireCooldown > 0) this.fireCooldown = Math.max(0, this.fireCooldown - realDt);
+    this.fireBufferTimer = updateFireInputBuffer({
+      currentBuffer: this.fireBufferTimer,
+      justPressed: false,
+      dt: realDt,
+    });
+    this.weaponBloom = Math.max(0, this.weaponBloom * Math.exp(-8.5 * realDt) - realDt * 0.01);
     if (this.hitmarkerTimer > 0) {
       this.hitmarkerTimer = Math.max(0, this.hitmarkerTimer - realDt);
       if (this.hitmarkerTimer === 0) this.hitmarkerKind = 'none';
@@ -1169,7 +1342,10 @@ export class ArenaEngine {
     if (this.trauma > 0) this.trauma = Math.max(0, this.trauma - realDt * 2.8);
     if (this.muzzleFlashTimer > 0) {
       this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - realDt);
-      if (this.muzzleFlashTimer === 0) this.muzzleLight.intensity = 0;
+      if (this.muzzleFlashTimer === 0) {
+        this.muzzleLight.intensity = 0;
+        this.muzzleFlashMesh.visible = false;
+      }
     }
 
     if (this.reloading) {
@@ -1359,7 +1535,11 @@ export class ArenaEngine {
         adsHeld: this.adsHeld,
         playerPos: [this.moveState.x, this.moveState.y, this.moveState.z],
         playerYaw: this.moveState.yaw,
-        spreadRatio: Math.min(1, speedMs / 14) * 0.6 + (this.adsHeld ? 0 : 0.25),
+        spreadRatio: Math.min(
+          1,
+          speedMs / 14 * 0.55 + (this.adsHeld ? 0 : 0.22) + this.weaponBloom * 22,
+        ),
+        autoFireEnabled: this.autoFireEnabled,
       });
     }
   }
@@ -1600,6 +1780,8 @@ export class ArenaEngine {
 
     this.particleMesh.geometry.dispose();
     (this.particleMesh.material as THREE.Material).dispose();
+    this.muzzleFlashMesh.geometry.dispose();
+    (this.muzzleFlashMesh.material as THREE.Material).dispose();
     this.contactShadowGeo.dispose();
     this.contactShadowMat.dispose();
     this.contactShadowTex.dispose();

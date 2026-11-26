@@ -43,6 +43,7 @@ const INITIAL_HUD: HudTelemetrySnapshot = {
   playerPos: [0, 0, 30],
   playerYaw: 0,
   spreadRatio: 0.25,
+  autoFireEnabled: false,
 };
 
 export default function App() {
@@ -115,7 +116,9 @@ export default function App() {
       const myId = socketRef.current.clientId;
       if (msg.attackerId === myId && msg.targetId !== myId) {
         damageDealtRef.current += msg.damage;
-        engineRef.current?.notifyHitConfirm(msg.newHp <= 0);
+        engineRef.current?.notifyHitConfirm(
+          msg.newHp <= 0 ? 'kill' : msg.isHeadshot ? 'crit' : 'hit',
+        );
       } else if (msg.targetId === myId && msg.attackerId !== myId) {
         engineRef.current?.notifyLocalDamaged(msg.attackerId);
       }
@@ -195,6 +198,11 @@ export default function App() {
   useEffect(() => {
     engineRef.current?.setLocalIdentity(socket.clientId, characterId);
   }, [socket.clientId, characterId]);
+
+  // Sync touch mode with engine for mobile aim assist and auto-fire
+  useEffect(() => {
+    engineRef.current?.setTouchMode(touchEnabled);
+  }, [touchEnabled]);
 
   const handleSelectMap = useCallback((mapId: MapId) => {
     setSelectedMapId(mapId);
@@ -419,11 +427,13 @@ export default function App() {
             <MobileControls
               activeWeapon={hud.weaponId}
               adsHeld={hud.adsHeld}
+              autoFireEnabled={hud.autoFireEnabled}
               rotatedLandscape={isPortraitMobile}
               onMove={(x, y, sprint) => engineRef.current?.setTouchMove(x, y, sprint)}
               onLook={(dx, dy) => engineRef.current?.addTouchLook(dx, dy)}
               onFireChange={(f) => engineRef.current?.setTouchFiring(f)}
               onToggleAds={() => engineRef.current?.toggleAds()}
+              onToggleAutoFire={() => engineRef.current?.toggleAutoFire()}
               onJump={() => engineRef.current?.triggerJump()}
               onDash={() => engineRef.current?.triggerDash()}
               onSlideChange={(s) => engineRef.current?.setTouchCrouch(s)}

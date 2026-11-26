@@ -346,9 +346,8 @@ export function evaluateBotStep(
     const dist = Math.hypot(other.x - botState.x, other.y - botState.y, other.z - botState.z);
     const targetCenter: [number, number, number] = [other.x, other.y + 1.12, other.z];
     const los = dist < 48 && hasLineOfSight(botEye, targetCenter, map);
-    const lowHpBonus = other.hp <= 40 ? 18 : 0;
-    const humanBias = other.isBot ? 0 : 6;
-    const score = (los ? 65 : 0) + lowHpBonus + humanBias - dist;
+    const lowHpBonus = other.hp <= 30 ? 8 : 0;
+    const score = (los ? 65 : 0) + lowHpBonus - dist;
     if (score > bestScore) {
       bestScore = score;
       bestTarget = other;
@@ -358,7 +357,7 @@ export function evaluateBotStep(
   }
 
   if (bestHasLos && !mem.hadLosPrev) {
-    mem.reactionDelay = (role === 'sharpshooter' ? 0.16 : 0.2) + rng() * 0.18;
+    mem.reactionDelay = 0.55 + rng() * 0.45;
   }
   mem.hadLosPrev = bestHasLos;
   mem.reactionDelay = Math.max(0, mem.reactionDelay - dt);
@@ -367,28 +366,27 @@ export function evaluateBotStep(
     mem.lastKnownTargetPos = [bestTarget.x, bestTarget.y, bestTarget.z];
   }
 
-  // Velocity lead prediction for aiming & grenade splash interception
+  // Gentle velocity lead prediction so strafing remains dodgeable
   let aimTargetX = bestTarget ? bestTarget.x : botState.x;
   let aimTargetY = bestTarget ? bestTarget.y + 1.12 : botState.y + 1.12;
   let aimTargetZ = bestTarget ? bestTarget.z : botState.z;
   if (bestTarget) {
     const leadTime =
       botState.weaponId === 'frag-launcher'
-        ? Math.min(0.85, bestDist / 26)
-        : Math.min(0.28, 0.06 + bestDist * 0.005);
+        ? Math.min(0.42, bestDist / 42)
+        : Math.min(0.14, 0.03 + bestDist * 0.0025);
     aimTargetX += bestTarget.vx * leadTime;
     aimTargetZ += bestTarget.vz * leadTime;
     if (botState.weaponId === 'frag-launcher') {
-      // Aim slightly toward lower center/feet for reliable grenade splash damage
-      aimTargetY = bestTarget.y + 0.35;
+      aimTargetY = bestTarget.y + 0.4;
     } else {
-      aimTargetY += bestTarget.vy * leadTime * 0.35;
+      aimTargetY += bestTarget.vy * leadTime * 0.25;
     }
   }
 
-  // Low-HP tactical cover retreat decision
+  // Retreat to cover only when critically low
   let retreatingToCover = false;
-  if (botState.hp <= 38 && bestTarget && bestHasLos) {
+  if (botState.hp <= 22 && bestTarget && bestHasLos) {
     if (!mem.coverTarget || mem.coverTimer <= 0) {
       mem.coverTarget = findNearestCoverPoint(
         [botState.x, botState.y, botState.z],
@@ -484,7 +482,7 @@ export function evaluateBotStep(
   }
 
   const yawDiff = shortestAngleDiff(botMove.yaw, desiredYaw);
-  const maxTurn = (bestHasLos ? 7.6 : 5.2) * dt;
+  const maxTurn = (bestHasLos ? 3.8 : 3.2) * dt;
   const nextYaw =
     Math.abs(yawDiff) <= maxTurn ? desiredYaw : botMove.yaw + Math.sign(yawDiff) * maxTurn;
 
@@ -492,34 +490,29 @@ export function evaluateBotStep(
   const dirZ = navDz / navDist;
   const blockedCenter = probeBoxAhead(botState.x, botState.y, botState.z, dirX, dirZ, 2.9, map);
 
-  let forward = 0.9;
-  let right = 0.25 * mem.strafeSign;
+  let forward = 0.85;
+  let right = 0.18 * mem.strafeSign;
   let jumpJustPressed = false;
   let crouchHeld = false;
   let dashJustPressed = false;
   let sprintHeld = false;
 
   if (retreatingToCover) {
-    forward = 1.0;
+    forward = 0.95;
     sprintHeld = true;
-    right = 0.2 * mem.strafeSign;
-    if (botMove.dashCooldownTimer <= 0) {
-      dashJustPressed = true;
-    } else if (Math.hypot(botMove.vx, botMove.vz) > 7.5 && botMove.slideCooldownTimer <= 0) {
-      crouchHeld = true;
-    }
+    right = 0.15 * mem.strafeSign;
   } else if (bestTarget && bestHasLos && !seekingElevation) {
     const pref = weaponPreferredRange(botState.weaponId, role);
     if (bestDist < pref.min) {
-      forward = -0.55;
-      right = 0.95 * mem.strafeSign;
+      forward = -0.45;
+      right = 0.55 * mem.strafeSign;
     } else if (bestDist <= pref.max) {
-      forward = role === 'rusher' ? 0.45 : 0.12;
-      right = 0.92 * mem.strafeSign;
+      forward = role === 'rusher' ? 0.35 : 0.08;
+      right = 0.52 * mem.strafeSign;
     } else {
-      forward = 0.95;
-      right = (role === 'flanker' ? 0.68 : 0.4) * mem.strafeSign;
-      sprintHeld = bestDist > pref.max + 3.5;
+      forward = 0.88;
+      right = (role === 'flanker' ? 0.45 : 0.25) * mem.strafeSign;
+      sprintHeld = bestDist > pref.max + 5;
     }
   } else {
     forward = 1.0;
@@ -567,10 +560,10 @@ export function evaluateBotStep(
     }
   }
 
-  // Tactical crouch-juke or hop in active duels
+  // Occasional combat hop (less bunny-hop spam)
   if (mem.jumpTimer <= 0) {
-    mem.jumpTimer = (role === 'rusher' ? 1.8 : 2.5) + rng() * 2.4;
-    if (bestHasLos && bestDist < 18) {
+    mem.jumpTimer = 4.5 + rng() * 4.5;
+    if (bestHasLos && bestDist < 12 && rng() < 0.4) {
       jumpJustPressed = true;
     }
   }
@@ -590,13 +583,13 @@ export function evaluateBotStep(
     const spec = WEAPONS[botState.weaponId];
     const burstScale =
       spec.id === 'pulse-carbine'
-        ? 2.0
+        ? 3.2
         : spec.id === 'rail-rifle'
-          ? 1.45
+          ? 2.25
           : spec.id === 'scatter-gun'
-            ? 1.55
-            : 1.7;
-    mem.fireCooldown = spec.fireInterval * burstScale + rng() * 0.25;
+            ? 2.4
+            : 2.55;
+    mem.fireCooldown = spec.fireInterval * burstScale + 0.18 + rng() * 0.55;
     shouldFire = true;
 
     const dx = aimTargetX - botEye[0];
@@ -605,21 +598,21 @@ export function evaluateBotStep(
     const len = Math.hypot(dx, dy, dz) || 1;
     fireDir = [dx / len, dy / len, dz / len];
 
-    const alignmentPenalty = Math.min(0.18, Math.abs(yawDiff) * 0.32);
+    const alignmentPenalty = Math.min(0.18, Math.abs(yawDiff) * 0.35);
     const baseAcc =
       spec.id === 'rail-rifle'
-        ? 0.46
+        ? 0.24
         : spec.id === 'scatter-gun'
-          ? 0.5
+          ? 0.28
           : spec.id === 'frag-launcher'
-            ? 0.44
-            : 0.38;
-    const hitChance = Math.max(0.16, baseAcc - bestDist * 0.006 - alignmentPenalty);
+            ? 0.24
+            : 0.22;
+    const hitChance = Math.max(0.08, baseAcc - bestDist * 0.007 - alignmentPenalty);
     didHit = rng() < hitChance;
     if (didHit) {
       hitPoint = [aimTargetX, aimTargetY, aimTargetZ];
     } else {
-      const missSpread = 0.075 + bestDist * 0.0018;
+      const missSpread = 0.14 + bestDist * 0.003;
       const mx = fireDir[0] + (rng() - 0.5) * missSpread;
       const my = fireDir[1] + (rng() - 0.5) * missSpread;
       const mz = fireDir[2] + (rng() - 0.5) * missSpread;
