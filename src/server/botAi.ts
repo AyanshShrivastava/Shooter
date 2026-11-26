@@ -286,6 +286,64 @@ function weaponPreferredRange(weaponId: WeaponId, role: BotRole): { min: number;
   }
 }
 
+export interface BotDifficultyProfile {
+  kdr: number;
+  hpRatio: number;
+  difficultyScale: number;
+  accuracyMultiplier: number;
+  reactionTimeMultiplier: number;
+}
+
+/**
+ * Computes dynamic bot accuracy and reaction-time multipliers from a player's K/D ratio and current HP.
+ * Neutral (1.0x) when no human player target is engaged.
+ */
+export function computeBotDifficultyProfile(target: NetPlayerState | null): BotDifficultyProfile {
+  if (!target || target.isBot) {
+    return {
+      kdr: 1,
+      hpRatio: 1,
+      difficultyScale: 1,
+      accuracyMultiplier: 1,
+      reactionTimeMultiplier: 1,
+    };
+  }
+
+  const kills = Math.max(0, target.kills);
+  const deaths = Math.max(0, target.deaths);
+  const kdr = kills / Math.max(1, deaths);
+  const maxHp = Math.max(1, target.maxHp || 100);
+  const hpRatio = Math.max(0, Math.min(1, target.hp / maxHp));
+
+  let kdOffset = 0;
+  if (kills === 0 && deaths === 0) {
+    kdOffset = 0;
+  } else if (kdr >= 1) {
+    kdOffset = Math.min(0.45, (kdr - 1) * 0.18);
+  } else {
+    kdOffset = -Math.min(0.35, (1 - kdr) * 0.22 + Math.max(0, deaths - kills) * 0.04);
+  }
+
+  const hpOffset =
+    hpRatio >= 0.65
+      ? ((hpRatio - 0.65) / 0.35) * 0.07
+      : -((0.65 - hpRatio) / 0.65) * 0.28;
+
+  const difficultyScale = Math.max(0.55, Math.min(1.52, 1.0 + kdOffset + hpOffset));
+  const accuracyMultiplier = Number(difficultyScale.toFixed(4));
+  const reactionTimeMultiplier = Number(
+    Math.max(0.55, Math.min(1.45, 2.0 - difficultyScale)).toFixed(4),
+  );
+
+  return {
+    kdr: Number(kdr.toFixed(3)),
+    hpRatio: Number(hpRatio.toFixed(3)),
+    difficultyScale: Number(difficultyScale.toFixed(4)),
+    accuracyMultiplier,
+    reactionTimeMultiplier,
+  };
+}
+
 export interface BotStepDecision {
   moveInput: CharacterMoveInput;
   shouldFire: boolean;
@@ -294,6 +352,7 @@ export interface BotStepDecision {
   didHit: boolean;
   hitPoint?: [number, number, number];
   targetId?: string;
+  difficulty: BotDifficultyProfile;
 }
 
 export function evaluateBotStep(
@@ -356,8 +415,10 @@ export function evaluateBotStep(
     }
   }
 
+  const difficulty = computeBotDifficultyProfile(bestTarget);
+
   if (bestHasLos && !mem.hadLosPrev) {
-    mem.reactionDelay = 0.55 + rng() * 0.45;
+    mem.reactionDelay = (0.55 + rng() * 0.45) * difficulty.reactionTimeMultiplier;
   }
   mem.hadLosPrev = bestHasLos;
   mem.reactionDelay = Math.max(0, mem.reactionDelay - dt);
@@ -482,7 +543,7 @@ export function evaluateBotStep(
   }
 
   const yawDiff = shortestAngleDiff(botMove.yaw, desiredYaw);
-  const maxTurn = (bestHasLos ? 3.8 : 3.2) * dt;
+  const maxTurn = (bestHasLos ? 3.8 : 3.2) * (0.85 + 0.15 * difficulty.accuracyMultiplier) * dt;
   const nextYaw =
     Math.abs(yawDiff) <= maxTurn ? desiredYaw : botMove.yaw + Math.sign(yawDiff) * maxTurn;
 
@@ -589,7 +650,8 @@ export function evaluateBotStep(
           : spec.id === 'scatter-gun'
             ? 2.4
             : 2.55;
-    mem.fireCooldown = spec.fireInterval * burstScale + 0.18 + rng() * 0.55;
+    const cadenceMult = Math.max(0.82, Math.min(1.22, 0.55 + 0.45 * difficulty.reactionTimeMultiplier));
+    mem.fireCooldown = (spec.fireInterval * burstScale + 0.18 + rng() * 0.55) * cadenceMult;
     shouldFire = true;
 
     const dx = aimTargetX - botEye[0];
@@ -607,12 +669,16 @@ export function evaluateBotStep(
           : spec.id === 'frag-launcher'
             ? 0.24
             : 0.22;
-    const hitChance = Math.max(0.08, baseAcc - bestDist * 0.007 - alignmentPenalty);
+    const rawHitChance = Math.max(0.05, baseAcc - bestDist * 0.007 - alignmentPenalty);
+    const hitChance = Math.max(
+      0.05,
+      Math.min(0.62, rawHitChance * difficulty.accuracyMultiplier),
+    );
     didHit = rng() < hitChance;
     if (didHit) {
       hitPoint = [aimTargetX, aimTargetY, aimTargetZ];
     } else {
-      const missSpread = 0.14 + bestDist * 0.003;
+      const missSpread = (0.14 + bestDist * 0.003) / Math.sqrt(difficulty.accuracyMultiplier);
       const mx = fireDir[0] + (rng() - 0.5) * missSpread;
       const my = fireDir[1] + (rng() - 0.5) * missSpread;
       const mz = fireDir[2] + (rng() - 0.5) * missSpread;
@@ -644,5 +710,6 @@ export function evaluateBotStep(
     didHit,
     hitPoint,
     targetId: bestTarget?.id,
+    difficulty,
   };
 }
